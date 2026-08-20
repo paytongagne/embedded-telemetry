@@ -12,6 +12,7 @@ public:
     void begin();
     void loop(SensorManager &sensors, RuntimeState &runtime);
     void publishTelemetry(const String &packet);
+    void queueCommand(const String &command);
     bool enabled() const;
     bool wifiConnected() const;
     bool mqttConnected() const;
