@@ -12,7 +12,39 @@ NUMERIC_KEYS = {
     "DIST",
     "TOF_TIMEOUT",
     "I2C_ERR",
+    "RECOVERY",
+    "BME_FAIL",
+    "IMU_FAIL",
 }
+
+
+def crc16_ccitt(payload):
+    crc = 0xFFFF
+
+    for byte in payload.encode("utf-8"):
+        crc ^= byte << 8
+
+        for _ in range(8):
+            if crc & 0x8000:
+                crc = ((crc << 1) ^ 0x1021) & 0xFFFF
+            else:
+                crc = (crc << 1) & 0xFFFF
+
+    return crc
+
+
+def verify_crc(line):
+    if not line or ",CRC=" not in line:
+        return True
+
+    payload, received = line.rsplit(",CRC=", 1)
+
+    try:
+        received_crc = int(received, 16)
+    except ValueError:
+        return False
+
+    return crc16_ccitt(payload) == received_crc
 
 
 def parse_telemetry(line):
@@ -22,6 +54,9 @@ def parse_telemetry(line):
     line = line.strip()
 
     if not line.startswith("TEL,"):
+        return None
+
+    if not verify_crc(line):
         return None
 
     parts = line.split(",")
@@ -35,7 +70,8 @@ def parse_telemetry(line):
         return None
 
     data = {
-        "sequence": sequence
+        "sequence": sequence,
+        "CRC_VALID": True,
     }
 
     for item in parts[2:]:
@@ -73,15 +109,10 @@ def has_required_fields(data):
     required = {
         "sequence",
         "TIME",
-        "TEMP",
-        "PRESS",
-        "HUM",
-        "AX",
-        "AY",
-        "AZ",
-        "GX",
-        "GY",
-        "GZ",
+        "BME",
+        "IMU",
+        "AUX",
+        "STATUS",
     }
 
     return required.issubset(data.keys())
