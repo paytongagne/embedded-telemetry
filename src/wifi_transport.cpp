@@ -41,22 +41,6 @@ public:
 private:
     String buffer_;
 };
-
-void mqttCallback(char *topic, byte *payload, unsigned int length) {
-    if (activeTransport == nullptr) {
-        return;
-    }
-
-    String message;
-    message.reserve(length);
-    for (unsigned int i = 0; i < length; ++i) {
-        message += static_cast<char>(payload[i]);
-    }
-
-    if (String(topic) == commandTopic()) {
-        activeTransport->loop;
-    }
-}
 }
 
 WifiTransport::WifiTransport() = default;
@@ -73,11 +57,7 @@ void WifiTransport::begin() {
     mqttClient.setKeepAlive(wifi_config::MQTT_KEEPALIVE_SECONDS);
 
     mqttClient.setCallback([](char *topic, byte *payload, unsigned int length) {
-        if (activeTransport == nullptr) {
-            return;
-        }
-
-        if (String(topic) != commandTopic()) {
+        if (activeTransport == nullptr || String(topic) != commandTopic()) {
             return;
         }
 
@@ -86,11 +66,15 @@ void WifiTransport::begin() {
         for (unsigned int i = 0; i < length; ++i) {
             command += static_cast<char>(payload[i]);
         }
-        activeTransport->pendingCommand_ = command;
+        activeTransport->queueCommand(command);
     });
 
     serviceWifi();
 #endif
+}
+
+void WifiTransport::queueCommand(const String &command) {
+    pendingCommand_ = command;
 }
 
 void WifiTransport::serviceWifi() {
