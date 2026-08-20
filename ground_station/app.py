@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ground_station.attitude import AttitudePanel
 from ground_station.logger import TelemetryLogger
 from ground_station.parser import parse_telemetry
 from ground_station.protocol import (
@@ -115,7 +116,10 @@ class GroundStationWindow(QMainWindow):
         self.raw_log.document().setMaximumBlockCount(1500)
         raw_layout.addWidget(self.raw_log)
 
+        self.attitude_panel = AttitudePanel()
+
         tabs.addTab(dashboard, "Dashboard")
+        tabs.addTab(self.attitude_panel, "Attitude")
         tabs.addTab(raw_tab, "Raw Telemetry")
 
     def build_connection_bar(self):
@@ -568,6 +572,7 @@ class GroundStationWindow(QMainWindow):
 
         data = self.latest_data
         if not data:
+            self.attitude_panel.set_attitude(None, None, False)
             return
 
         temp_f = self.c_to_f(data.get("TEMP"))
@@ -600,8 +605,10 @@ class GroundStationWindow(QMainWindow):
         self.style_health_card(self.aux_health, aux)
 
         pitch, roll = self.calculate_pitch_roll(data)
+        attitude_valid = pitch is not None and roll is not None and imu == "OK"
         self.pitch_label["value"].setText("-- °" if pitch is None else f"{pitch:.1f} °")
         self.roll_label["value"].setText("-- °" if roll is None else f"{roll:.1f} °")
+        self.attitude_panel.set_attitude(pitch, roll, attitude_valid)
 
         self.refresh_diagnostics(data)
         self.refresh_plots()
