@@ -2,6 +2,9 @@
 
 #include <ESP8266WiFi.h>
 #include <PubSubClient.h>
+#include <WiFiManager.h>
+
+#include <cstring>
 
 #include "command.h"
 #include "wifi_config.h"
@@ -11,20 +14,8 @@ WiFiClient wifiClient;
 PubSubClient mqttClient(wifiClient);
 WifiTransport *activeTransport = nullptr;
 
-String telemetryTopic() {
-    return String("embedded-telemetry/") + wifi_secrets::DEVICE_ID + "/telemetry";
-}
-
-String commandTopic() {
-    return String("embedded-telemetry/") + wifi_secrets::DEVICE_ID + "/command";
-}
-
-String responseTopic() {
-    return String("embedded-telemetry/") + wifi_secrets::DEVICE_ID + "/response";
-}
-
-String availabilityTopic() {
-    return String("embedded-telemetry/") + wifi_secrets::DEVICE_ID + "/availability";
+String makeTopic(const String &deviceId, const char *suffix) {
+    return String("embedded-telemetry/") + deviceId + "/" + suffix;
 }
 
 class BufferPrint : public Print {
@@ -41,23 +32,144 @@ public:
 private:
     String buffer_;
 };
+
+void copyValue(char *destination, size_t destinationSize, const char *source) {
+    if (destinationSize == 0) {
+        return;
+    }
+    strncpy(destination, source == nullptr ? "" : source, destinationSize - 1);
+    destination[destinationSize - 1] = '\0';
+}
 }
 
 WifiTransport::WifiTransport() = default;
 
 void WifiTransport::begin() {
-#if WIFI_TELEMETRY_ENABLED
     activeTransport = this;
+    configurationLoaded_ = configStore_.begin();
+
     WiFi.mode(WIFI_STA);
-    WiFi.persistent(false);
     WiFi.setAutoReconnect(true);
 
-    mqttClient.setServer(wifi_secrets::MQTT_HOST, wifi_secrets::MQTT_PORT);
+    provisioningSucceeded_ = runProvisioning();
+    configureMqttClient();
+}
+
+bool WifiTransport::runProvisioning() {
+    DeviceConfig &config = configStore_.config();
+
+    char portValue[6];
+    snprintf(portValue, sizeof(portValue), "%u", config.mqttPort);
+
+    WiFiManagerParameter mqttHostParam(
+        "mqtt_host",
+        "MQTT broker host or IP",
+        config.mqttHost,
+        sizeof(config.mqttHost)
+    );
+    WiFiManagerParameter mqttPortParam(
+        "mqtt_port",
+        "MQTT port",
+        portValue,
+        sizeof(portValue)
+    );
+    WiFiManagerParameter mqttUserParam(
+        "mqtt_user",
+        "MQTT username (optional)",
+        config.mqttUser,
+        sizeof(config.mqttUser)
+    );
+    WiFiManagerParameter mqttPasswordParam(
+        "mqtt_password",
+        "MQTT password (optional)",
+        config.mqttPassword,
+        sizeof(config.mqttPassword),
+        "type='password'"
+    );
+    WiFiManagerParameter deviceIdParam(
+        "device_id",
+        "Device name",
+        config.deviceId,
+        sizeof(config.deviceId)
+    );
+
+    WiFiManager manager;
+    manager.setConfigPortalTimeout(wifi_config::PORTAL_TIMEOUT_SECONDS);
+    manager.setConnectTimeout(20);
+    manager.setTitle("Embedded Telemetry Setup");
+    manager.addParameter(&mqttHostParam);
+    manager.addParameter(&mqttPortParam);
+    manager.addParameter(&mqttUserParam);
+    manager.addParameter(&mqttPasswordParam);
+    manager.addParameter(&deviceIdParam);
+
+    bool saveRequested = false;
+    manager.setSaveConfigCallback([&saveRequested]() {
+        saveRequested = true;
+    });
+
+    const String accessPoint = setupAccessPointName();
+    const bool needsInitialSetup = !configStore_.isConfigured();
+
+    Serial.println();
+    if (needsInitialSetup) {
+        Serial.println("Wireless configuration required.");
+        Serial.print("Connect to setup network: ");
+        Serial.println(accessPoint);
+    }
+
+    const bool connected = needsInitialSetup
+        ? manager.startConfigPortal(accessPoint.c_str())
+        : manager.autoConnect(accessPoint.c_str());
+
+    if (!connected) {
+        Serial.println("WiFi provisioning timed out; USB telemetry remains available.");
+        return false;
+    }
+
+    if (saveRequested || needsInitialSetup) {
+        copyValue(config.mqttHost, sizeof(config.mqttHost), mqttHostParam.getValue());
+        config.mqttPort = static_cast<uint16_t>(atoi(mqttPortParam.getValue()));
+        if (config.mqttPort == 0) {
+            config.mqttPort = 1883;
+        }
+        copyValue(config.mqttUser, sizeof(config.mqttUser), mqttUserParam.getValue());
+        copyValue(config.mqttPassword, sizeof(config.mqttPassword), mqttPasswordParam.getValue());
+        copyValue(config.deviceId, sizeof(config.deviceId), deviceIdParam.getValue());
+        if (config.deviceId[0] == '\0') {
+            copyValue(config.deviceId, sizeof(config.deviceId), "esp8285-node");
+        }
+
+        if (!configStore_.save()) {
+            Serial.println("Warning: unable to persist network configuration.");
+        }
+    }
+
+    Serial.print("WiFi connected: ");
+    Serial.println(WiFi.SSID());
+    Serial.print("IP address: ");
+    Serial.println(WiFi.localIP());
+    return configStore_.isConfigured();
+}
+
+void WifiTransport::configureMqttClient() {
+    const DeviceConfig &config = configStore_.config();
+
+    if (!configStore_.isConfigured()) {
+        return;
+    }
+
+    mqttClient.setServer(config.mqttHost, config.mqttPort);
     mqttClient.setBufferSize(wifi_config::MQTT_BUFFER_SIZE);
     mqttClient.setKeepAlive(wifi_config::MQTT_KEEPALIVE_SECONDS);
 
     mqttClient.setCallback([](char *topic, byte *payload, unsigned int length) {
-        if (activeTransport == nullptr || String(topic) != commandTopic()) {
+        if (activeTransport == nullptr) {
+            return;
+        }
+
+        const String expectedTopic = makeTopic(activeTransport->deviceId(), "command");
+        if (String(topic) != expectedTopic) {
             return;
         }
 
@@ -68,9 +180,6 @@ void WifiTransport::begin() {
         }
         activeTransport->queueCommand(command);
     });
-
-    serviceWifi();
-#endif
 }
 
 void WifiTransport::queueCommand(const String &command) {
@@ -78,8 +187,7 @@ void WifiTransport::queueCommand(const String &command) {
 }
 
 void WifiTransport::serviceWifi() {
-#if WIFI_TELEMETRY_ENABLED
-    if (WiFi.status() == WL_CONNECTED) {
+    if (!configured() || WiFi.status() == WL_CONNECTED) {
         return;
     }
 
@@ -89,13 +197,11 @@ void WifiTransport::serviceWifi() {
     }
 
     lastWifiAttemptMs_ = now;
-    WiFi.begin(wifi_secrets::SSID, wifi_secrets::PASSWORD);
-#endif
+    WiFi.reconnect();
 }
 
 void WifiTransport::serviceMqtt() {
-#if WIFI_TELEMETRY_ENABLED
-    if (WiFi.status() != WL_CONNECTED) {
+    if (!configured() || WiFi.status() != WL_CONNECTED) {
         return;
     }
 
@@ -110,15 +216,16 @@ void WifiTransport::serviceMqtt() {
     }
     lastMqttAttemptMs_ = now;
 
-    const String clientId = String("embedded-telemetry-") + wifi_secrets::DEVICE_ID;
-    const String availability = availabilityTopic();
+    const DeviceConfig &config = configStore_.config();
+    const String clientId = String("embedded-telemetry-") + config.deviceId;
+    const String availability = makeTopic(config.deviceId, "availability");
 
     bool connected = false;
-    if (strlen(wifi_secrets::MQTT_USER) > 0) {
+    if (strlen(config.mqttUser) > 0) {
         connected = mqttClient.connect(
             clientId.c_str(),
-            wifi_secrets::MQTT_USER,
-            wifi_secrets::MQTT_PASSWORD,
+            config.mqttUser,
+            config.mqttPassword,
             availability.c_str(),
             1,
             true,
@@ -137,18 +244,22 @@ void WifiTransport::serviceMqtt() {
     if (connected) {
         mqttClient.publish(availability.c_str(), "online", true);
         subscribeTopics();
+        Serial.print("MQTT connected: ");
+        Serial.print(config.mqttHost);
+        Serial.print(":");
+        Serial.println(config.mqttPort);
     }
-#endif
 }
 
 void WifiTransport::subscribeTopics() {
-#if WIFI_TELEMETRY_ENABLED
-    mqttClient.subscribe(commandTopic().c_str(), 1);
-#endif
+    if (!mqttClient.connected()) {
+        return;
+    }
+
+    mqttClient.subscribe(makeTopic(deviceId(), "command").c_str(), 1);
 }
 
 void WifiTransport::processPendingCommand(SensorManager &sensors, RuntimeState &runtime) {
-#if WIFI_TELEMETRY_ENABLED
     if (pendingCommand_.length() == 0) {
         return;
     }
@@ -159,15 +270,14 @@ void WifiTransport::processPendingCommand(SensorManager &sensors, RuntimeState &
     BufferPrint output;
     processCommand(command, sensors, runtime, output);
     publishResponseLines(output.buffer());
-#endif
 }
 
 void WifiTransport::publishResponseLines(const String &buffer) {
-#if WIFI_TELEMETRY_ENABLED
     if (!mqttClient.connected() || buffer.length() == 0) {
         return;
     }
 
+    const String topic = makeTopic(deviceId(), "response");
     int start = 0;
     while (start < static_cast<int>(buffer.length())) {
         int end = buffer.indexOf('\n', start);
@@ -178,62 +288,56 @@ void WifiTransport::publishResponseLines(const String &buffer) {
         String line = buffer.substring(start, end);
         line.trim();
         if (line.length() > 0) {
-            mqttClient.publish(responseTopic().c_str(), line.c_str(), false);
+            mqttClient.publish(topic.c_str(), line.c_str(), false);
         }
         start = end + 1;
     }
-#endif
 }
 
 void WifiTransport::loop(SensorManager &sensors, RuntimeState &runtime) {
-#if WIFI_TELEMETRY_ENABLED
     serviceWifi();
     serviceMqtt();
     processPendingCommand(sensors, runtime);
-#else
-    (void)sensors;
-    (void)runtime;
-#endif
 }
 
 void WifiTransport::publishTelemetry(const String &packet) {
-#if WIFI_TELEMETRY_ENABLED
     if (mqttClient.connected()) {
-        mqttClient.publish(telemetryTopic().c_str(), packet.c_str(), false);
+        mqttClient.publish(makeTopic(deviceId(), "telemetry").c_str(), packet.c_str(), false);
     }
-#else
-    (void)packet;
-#endif
 }
 
 bool WifiTransport::enabled() const {
-    return WIFI_TELEMETRY_ENABLED;
+    return true;
 }
 
 bool WifiTransport::wifiConnected() const {
-#if WIFI_TELEMETRY_ENABLED
     return WiFi.status() == WL_CONNECTED;
-#else
-    return false;
-#endif
 }
 
 bool WifiTransport::mqttConnected() const {
-#if WIFI_TELEMETRY_ENABLED
     return mqttClient.connected();
-#else
-    return false;
-#endif
+}
+
+bool WifiTransport::configured() const {
+    return configStore_.isConfigured();
 }
 
 String WifiTransport::deviceId() const {
-    return wifi_secrets::DEVICE_ID;
+    return configStore_.config().deviceId;
 }
 
 String WifiTransport::ipAddress() const {
-#if WIFI_TELEMETRY_ENABLED
     return WiFi.status() == WL_CONNECTED ? WiFi.localIP().toString() : String("");
-#else
-    return String("");
-#endif
+}
+
+String WifiTransport::mqttHost() const {
+    return configStore_.config().mqttHost;
+}
+
+String WifiTransport::setupAccessPointName() const {
+    String name = wifi_config::SETUP_AP_PREFIX;
+    name += "-";
+    name += String(ESP.getChipId(), HEX);
+    name.toUpperCase();
+    return name;
 }
