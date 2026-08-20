@@ -8,6 +8,9 @@ VALID_COMMANDS = {
     "INJECT_FAULT",
 }
 
+MIN_RATE_MS = 100
+MAX_RATE_MS = 10000
+
 
 def build_command(name, value=None):
     name = name.strip().upper()
@@ -77,8 +80,10 @@ def command_status():
 def command_set_rate(milliseconds):
     milliseconds = int(milliseconds)
 
-    if milliseconds < 100:
-        raise ValueError("Telemetry rate must be at least 100 ms")
+    if not MIN_RATE_MS <= milliseconds <= MAX_RATE_MS:
+        raise ValueError(
+            f"Telemetry rate must be between {MIN_RATE_MS} and {MAX_RATE_MS} ms"
+        )
 
     return build_command("SET_RATE", milliseconds)
 
