@@ -6,34 +6,54 @@ from collections import deque
 import pyqtgraph as pg
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
-    QApplication, QComboBox, QGridLayout, QGroupBox, QHBoxLayout, QLabel,
-    QMainWindow, QPushButton, QSpinBox, QTextEdit, QVBoxLayout, QWidget,
+    QApplication,
+    QComboBox,
+    QGridLayout,
+    QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QMainWindow,
+    QPlainTextEdit,
+    QPushButton,
+    QSpinBox,
+    QTabWidget,
+    QTextEdit,
+    QVBoxLayout,
+    QWidget,
 )
 
 from ground_station.logger import TelemetryLogger
 from ground_station.parser import parse_telemetry
 from ground_station.protocol import (
-    command_clear_faults, command_inject_fault, command_pause, command_reset,
-    command_resume, command_set_rate, command_status, parse_response,
+    command_clear_faults,
+    command_inject_fault,
+    command_pause,
+    command_reset,
+    command_resume,
+    command_set_rate,
+    command_status,
+    parse_response,
 )
 from ground_station.serial_manager import SerialManager
 from ground_station.stats import TelemetryStats
 
-MAX_POINTS = 120
-STALE_TIMEOUT_SECONDS = 3.0
+MAX_POINTS = 180
+DEFAULT_STALE_TIMEOUT_SECONDS = 3.0
 
 
 class GroundStationWindow(QMainWindow):
-    def __init__(self):
+    def __init__(self, serial_manager=None):
         super().__init__()
         self.setWindowTitle("Embedded Telemetry Ground Station")
-        self.resize(1500, 950)
+        self.resize(1500, 930)
 
         self.stats = TelemetryStats()
         self.logger = TelemetryLogger()
         self.latest_data = {}
         self.last_packet_wall_time = None
         self.stale_reported = False
+        self.commanded_rate_ms = 1000
+        self.device_paused = False
 
         self.time_history = deque(maxlen=MAX_POINTS)
         self.temp_history = deque(maxlen=MAX_POINTS)
@@ -46,7 +66,7 @@ class GroundStationWindow(QMainWindow):
         self.gy_history = deque(maxlen=MAX_POINTS)
         self.gz_history = deque(maxlen=MAX_POINTS)
 
-        self.serial_manager = SerialManager(port="COM3", baud=115200)
+        self.serial_manager = serial_manager or SerialManager(port="COM3", baud=115200)
 
         self.build_ui()
 
@@ -56,28 +76,53 @@ class GroundStationWindow(QMainWindow):
         self.gui_timer.start(100)
 
         self.refresh_ports()
+        self.update_control_state()
 
     def build_ui(self):
-        central = QWidget()
-        self.setCentralWidget(central)
-        main_layout = QVBoxLayout(central)
+        tabs = QTabWidget()
+        self.setCentralWidget(tabs)
 
-        main_layout.addLayout(self.build_connection_bar())
-        main_layout.addLayout(self.build_status_cards())
-        main_layout.addLayout(self.build_health_bar())
-        main_layout.addLayout(self.build_graph_section())
+        dashboard = QWidget()
+        dashboard_layout = QVBoxLayout(dashboard)
+        dashboard_layout.setContentsMargins(8, 6, 8, 6)
+        dashboard_layout.setSpacing(5)
+
+        dashboard_layout.addLayout(self.build_connection_bar())
+        dashboard_layout.addLayout(self.build_status_cards())
+        dashboard_layout.addLayout(self.build_health_bar())
+        dashboard_layout.addLayout(self.build_graph_section(), 1)
 
         lower_layout = QHBoxLayout()
         lower_layout.addWidget(self.build_diagnostics_panel(), 1)
         lower_layout.addWidget(self.build_event_panel(), 2)
-        main_layout.addLayout(lower_layout)
-        main_layout.addLayout(self.build_command_bar())
+        dashboard_layout.addLayout(lower_layout)
+        dashboard_layout.addLayout(self.build_command_bar())
+
+        raw_tab = QWidget()
+        raw_layout = QVBoxLayout(raw_tab)
+        raw_layout.setContentsMargins(8, 8, 8, 8)
+
+        raw_header = QHBoxLayout()
+        raw_header.addWidget(QLabel("Raw serial traffic"))
+        raw_header.addStretch()
+        clear_raw = QPushButton("Clear Raw Log")
+        clear_raw.clicked.connect(lambda: self.raw_log.clear())
+        raw_header.addWidget(clear_raw)
+        raw_layout.addLayout(raw_header)
+
+        self.raw_log = QPlainTextEdit()
+        self.raw_log.setReadOnly(True)
+        self.raw_log.document().setMaximumBlockCount(1500)
+        raw_layout.addWidget(self.raw_log)
+
+        tabs.addTab(dashboard, "Dashboard")
+        tabs.addTab(raw_tab, "Raw Telemetry")
 
     def build_connection_bar(self):
         layout = QHBoxLayout()
 
         title = QLabel("EMBEDDED TELEMETRY GROUND STATION")
-        title.setStyleSheet("font-size: 20px; font-weight: bold;")
+        title.setStyleSheet("font-size: 18px; font-weight: 700;")
 
         self.port_combo = QComboBox()
         self.refresh_button = QPushButton("Refresh Ports")
@@ -87,13 +132,17 @@ class GroundStationWindow(QMainWindow):
         self.connect_button.clicked.connect(self.toggle_connection)
 
         self.connection_label = QLabel("DISCONNECTED")
-        self.connection_label.setAlignment(Qt.AlignCenter)
-
         self.system_status_label = QLabel("UNKNOWN")
-        self.system_status_label.setAlignment(Qt.AlignCenter)
-
         self.telemetry_state_label = QLabel("NO DATA")
-        self.telemetry_state_label.setAlignment(Qt.AlignCenter)
+
+        for label in (
+            self.connection_label,
+            self.system_status_label,
+            self.telemetry_state_label,
+        ):
+            label.setAlignment(Qt.AlignCenter)
+            label.setMinimumWidth(72)
+            label.setStyleSheet("font-weight: 700; padding: 3px 6px;")
 
         layout.addWidget(title)
         layout.addStretch()
@@ -107,47 +156,73 @@ class GroundStationWindow(QMainWindow):
 
     def build_status_cards(self):
         layout = QGridLayout()
+        layout.setHorizontalSpacing(6)
+        layout.setVerticalSpacing(2)
 
-        self.temp_label = self.make_value_card("Temperature", "-- °F")
-        self.press_label = self.make_value_card("Pressure", "-- hPa")
-        self.hum_label = self.make_value_card("Humidity", "-- %")
-        self.uptime_label = self.make_value_card("Uptime", "-- s")
-        self.packet_label = self.make_value_card("Packets", "0")
-        self.rate_label = self.make_value_card("Packet Rate", "0.00 Hz")
+        self.temp_label = self.make_value_card("Temperature", "-- °F", compact=True)
+        self.press_label = self.make_value_card("Pressure", "-- hPa", compact=True)
+        self.hum_label = self.make_value_card("Humidity", "-- %", compact=True)
+        self.uptime_label = self.make_value_card("Uptime", "-- s", compact=True)
+        self.packet_label = self.make_value_card("Packets", "0", compact=True)
+        self.rate_label = self.make_value_card("Avg Packet Rate", "0.00 Hz", compact=True)
 
-        layout.addWidget(self.temp_label["box"], 0, 0)
-        layout.addWidget(self.press_label["box"], 0, 1)
-        layout.addWidget(self.hum_label["box"], 0, 2)
-        layout.addWidget(self.uptime_label["box"], 1, 0)
-        layout.addWidget(self.packet_label["box"], 1, 1)
-        layout.addWidget(self.rate_label["box"], 1, 2)
+        cards = (
+            self.temp_label,
+            self.press_label,
+            self.hum_label,
+            self.uptime_label,
+            self.packet_label,
+            self.rate_label,
+        )
+
+        for column, card in enumerate(cards):
+            layout.addWidget(card["box"], 0, column)
+
         return layout
 
     def build_health_bar(self):
         layout = QGridLayout()
+        layout.setHorizontalSpacing(6)
+        layout.setVerticalSpacing(2)
 
-        self.bme_health = self.make_value_card("BME280", "UNKNOWN")
-        self.imu_health = self.make_value_card("IMU", "UNKNOWN")
-        self.aux_health = self.make_value_card("AUX 0x29", "UNKNOWN")
-        self.pitch_label = self.make_value_card("Pitch", "-- °")
-        self.roll_label = self.make_value_card("Roll", "-- °")
-        self.loss_label = self.make_value_card("Packet Loss", "0.00 %")
+        self.bme_health = self.make_value_card("BME280", "UNKNOWN", compact=True)
+        self.imu_health = self.make_value_card("IMU", "UNKNOWN", compact=True)
+        self.aux_health = self.make_value_card("AUX 0x29", "UNKNOWN", compact=True)
+        self.pitch_label = self.make_value_card("Pitch", "-- °", compact=True)
+        self.roll_label = self.make_value_card("Roll", "-- °", compact=True)
+        self.loss_label = self.make_value_card("Packet Loss", "0.00 %", compact=True)
 
-        layout.addWidget(self.bme_health["box"], 0, 0)
-        layout.addWidget(self.imu_health["box"], 0, 1)
-        layout.addWidget(self.aux_health["box"], 0, 2)
-        layout.addWidget(self.pitch_label["box"], 0, 3)
-        layout.addWidget(self.roll_label["box"], 0, 4)
-        layout.addWidget(self.loss_label["box"], 0, 5)
+        cards = (
+            self.bme_health,
+            self.imu_health,
+            self.aux_health,
+            self.pitch_label,
+            self.roll_label,
+            self.loss_label,
+        )
+
+        for column, card in enumerate(cards):
+            layout.addWidget(card["box"], 0, column)
+
         return layout
 
-    def make_value_card(self, title, initial_value):
+    def make_value_card(self, title, initial_value, compact=False):
         box = QGroupBox(title)
         layout = QVBoxLayout(box)
+        layout.setContentsMargins(7, 3, 7, 4)
+        layout.setSpacing(0)
+
         value = QLabel(initial_value)
         value.setAlignment(Qt.AlignCenter)
-        value.setStyleSheet("font-size: 20px; font-weight: bold;")
+        value.setStyleSheet(
+            f"font-size: {'16px' if compact else '18px'}; font-weight: 700;"
+        )
         layout.addWidget(value)
+
+        if compact:
+            box.setMaximumHeight(58)
+            box.setMinimumHeight(50)
+
         return {"box": box, "value": value}
 
     def make_plot(self, title, left_label, units):
@@ -159,6 +234,7 @@ class GroundStationWindow(QMainWindow):
 
     def build_graph_section(self):
         layout = QGridLayout()
+        layout.setSpacing(5)
 
         self.temp_plot = self.make_plot("Temperature", "Temperature", "°F")
         self.press_plot = self.make_plot("Pressure", "Pressure", "hPa")
@@ -188,43 +264,55 @@ class GroundStationWindow(QMainWindow):
         return layout
 
     def build_diagnostics_panel(self):
-        box = QGroupBox("Diagnostics")
+        box = QGroupBox("Diagnostics / Device")
         layout = QGridLayout(box)
+        layout.setVerticalSpacing(2)
 
-        self.lost_packets_label = QLabel("0")
-        self.malformed_packets_label = QLabel("0")
-        self.reconnects_label = QLabel("0")
-        self.min_temp_label = QLabel("--")
-        self.max_temp_label = QLabel("--")
-        self.peak_accel_label = QLabel("--")
-        self.peak_gyro_label = QLabel("--")
+        labels = {
+            "lost": ("Lost packets", "0"),
+            "malformed": ("Malformed packets", "0"),
+            "connections": ("Connections", "0"),
+            "duration": ("Session duration", "0.0 s"),
+            "min_temp": ("Min temperature", "--"),
+            "max_temp": ("Max temperature", "--"),
+            "peak_accel": ("Peak acceleration", "--"),
+            "peak_gyro": ("Peak gyro", "--"),
+            "fw": ("Firmware", "--"),
+            "rate": ("Device rate", "--"),
+            "paused": ("Paused", "--"),
+            "i2c": ("I2C errors", "0"),
+            "recovery": ("Recoveries", "0"),
+            "bme_fail": ("BME failures", "0"),
+            "imu_fail": ("IMU failures", "0"),
+            "crc": ("CRC", "--"),
+        }
 
-        rows = [
-            ("Lost packets", self.lost_packets_label),
-            ("Malformed packets", self.malformed_packets_label),
-            ("Connections", self.reconnects_label),
-            ("Min temperature", self.min_temp_label),
-            ("Max temperature", self.max_temp_label),
-            ("Peak acceleration", self.peak_accel_label),
-            ("Peak gyro", self.peak_gyro_label),
-        ]
+        self.diag_values = {}
+        items = list(labels.items())
 
-        for row, (name, value) in enumerate(rows):
-            layout.addWidget(QLabel(name), row, 0)
-            layout.addWidget(value, row, 1)
+        for index, (key, (name, initial)) in enumerate(items):
+            column_pair = 0 if index < 8 else 2
+            row = index if index < 8 else index - 8
+            value = QLabel(initial)
+            self.diag_values[key] = value
+            layout.addWidget(QLabel(name), row, column_pair)
+            layout.addWidget(value, row, column_pair + 1)
 
         return box
 
     def build_event_panel(self):
         box = QGroupBox("Event Log")
         layout = QVBoxLayout(box)
+        layout.setContentsMargins(6, 6, 6, 6)
         self.event_log = QTextEdit()
         self.event_log.setReadOnly(True)
+        self.event_log.document().setMaximumBlockCount(500)
         layout.addWidget(self.event_log)
         return box
 
     def build_command_bar(self):
         layout = QHBoxLayout()
+        layout.setSpacing(5)
 
         self.logging_button = QPushButton("Start Logging")
         self.logging_button.clicked.connect(self.toggle_logging)
@@ -246,9 +334,14 @@ class GroundStationWindow(QMainWindow):
         self.rate_button = QPushButton("Set Rate")
         self.rate_button.clicked.connect(self.send_rate_command)
 
-        self.inject_imu_button = QPushButton("Inject IMU Fault")
+        self.inject_imu_button = QPushButton("Fault IMU")
         self.inject_imu_button.clicked.connect(
             lambda: self.send_command(command_inject_fault("IMU"))
+        )
+
+        self.inject_bme_button = QPushButton("Fault BME")
+        self.inject_bme_button.clicked.connect(
+            lambda: self.send_command(command_inject_fault("BME"))
         )
 
         self.clear_faults_button = QPushButton("Clear Faults")
@@ -256,13 +349,36 @@ class GroundStationWindow(QMainWindow):
             lambda: self.send_command(command_clear_faults())
         )
 
+        self.reset_stats_button = QPushButton("Reset Stats")
+        self.reset_stats_button.clicked.connect(self.reset_statistics)
+
         self.reset_button = QPushButton("Reset Device")
         self.reset_button.clicked.connect(lambda: self.send_command(command_reset()))
 
+        self.device_controls = [
+            self.status_button,
+            self.pause_button,
+            self.resume_button,
+            self.rate_spin,
+            self.rate_button,
+            self.inject_imu_button,
+            self.inject_bme_button,
+            self.clear_faults_button,
+            self.reset_button,
+        ]
+
         for widget in (
-            self.logging_button, self.status_button, self.pause_button,
-            self.resume_button, self.rate_spin, self.rate_button,
-            self.inject_imu_button, self.clear_faults_button, self.reset_button,
+            self.logging_button,
+            self.status_button,
+            self.pause_button,
+            self.resume_button,
+            self.rate_spin,
+            self.rate_button,
+            self.inject_imu_button,
+            self.inject_bme_button,
+            self.clear_faults_button,
+            self.reset_stats_button,
+            self.reset_button,
         ):
             layout.addWidget(widget)
 
@@ -292,7 +408,7 @@ class GroundStationWindow(QMainWindow):
         current_port = self.port_combo.currentData()
         self.port_combo.clear()
 
-        ports = SerialManager.available_ports()
+        ports = self.serial_manager.available_ports()
         for port in ports:
             description = f"{port['device']} - {port['description']}"
             self.port_combo.addItem(description, port["device"])
@@ -326,15 +442,20 @@ class GroundStationWindow(QMainWindow):
         self.connection_label.setText("CONNECTED")
         self.connect_button.setText("Disconnect")
         self.add_event("INFO", f"Connected to {port}")
+        self.update_control_state()
 
         if self.logger.logging_enabled:
             self.logger.log_event("INFO", "SERIAL_CONNECT", port)
+
+        QTimer.singleShot(250, lambda: self.send_command(command_status()))
 
     def on_disconnect(self, port):
         self.connection_label.setText("DISCONNECTED")
         self.telemetry_state_label.setText("NO DATA")
         self.connect_button.setText("Connect")
+        self.device_paused = False
         self.add_event("WARN", f"Disconnected from {port}")
+        self.update_control_state()
 
         if self.logger.logging_enabled:
             self.logger.log_event("WARN", "SERIAL_DISCONNECT", port)
@@ -345,9 +466,12 @@ class GroundStationWindow(QMainWindow):
             self.logger.log_event("ERROR", "SERIAL_ERROR", str(error))
 
     def on_serial_line(self, line):
-        telemetry = parse_telemetry(line)
+        timestamp = time.strftime("%H:%M:%S")
+        self.raw_log.appendPlainText(f"[{timestamp}] RX {line}")
 
+        telemetry = parse_telemetry(line)
         if telemetry is not None:
+            self._remove_stale_sensor_values(telemetry)
             self.stats.update(telemetry)
             self.latest_data.update(telemetry)
             self.last_packet_wall_time = time.time()
@@ -360,7 +484,7 @@ class GroundStationWindow(QMainWindow):
 
         if line.strip().startswith("TEL,"):
             self.stats.update(None)
-            self.add_event("WARN", "Malformed telemetry packet")
+            self.add_event("WARN", "Malformed or CRC-invalid telemetry packet")
             return
 
         response = parse_response(line)
@@ -371,29 +495,53 @@ class GroundStationWindow(QMainWindow):
         self.add_event(response_type, response.get("raw", line))
 
         if response_type == "STATUS":
-            for key in ("STATE", "BME", "IMU", "AUX", "PAUSED", "RATE_MS", "FW"):
-                if key in response:
-                    self.latest_data[key] = response[key]
+            self._apply_status_response(response)
 
-            if "STATE" in response:
-                self.latest_data["STATUS"] = response["STATE"]
+    def _apply_status_response(self, response):
+        for key, value in response.items():
+            if key not in {"type", "raw"}:
+                self.latest_data[key] = value
+
+        if "STATE" in response:
+            self.latest_data["STATUS"] = response["STATE"]
+        if "RATE_MS" in response:
+            try:
+                self.commanded_rate_ms = int(response["RATE_MS"])
+                self.rate_spin.setValue(self.commanded_rate_ms)
+            except ValueError:
+                pass
+        if "PAUSED" in response:
+            self.device_paused = response["PAUSED"] == "1"
+
+    def _remove_stale_sensor_values(self, telemetry):
+        if telemetry.get("BME") == "FAULT":
+            for key in ("TEMP", "PRESS", "HUM"):
+                self.latest_data.pop(key, None)
+
+        if telemetry.get("IMU") == "FAULT":
+            for key in ("AX", "AY", "AZ", "GX", "GY", "GZ"):
+                self.latest_data.pop(key, None)
+
+    @staticmethod
+    def _history_value(data, key):
+        value = data.get(key)
+        return float("nan") if value is None else value
 
     def append_history(self, data):
         uptime = data.get("TIME")
         if uptime is None:
             return
 
-        seconds = uptime / 1000.0
-        self.time_history.append(seconds)
-        self.temp_history.append(data.get("TEMP"))
-        self.press_history.append(data.get("PRESS"))
-        self.hum_history.append(data.get("HUM"))
-        self.ax_history.append(data.get("AX"))
-        self.ay_history.append(data.get("AY"))
-        self.az_history.append(data.get("AZ"))
-        self.gx_history.append(data.get("GX"))
-        self.gy_history.append(data.get("GY"))
-        self.gz_history.append(data.get("GZ"))
+        self.time_history.append(uptime / 1000.0)
+        self.temp_history.append(self._history_value(data, "TEMP"))
+        self.press_history.append(self._history_value(data, "PRESS"))
+        self.hum_history.append(self._history_value(data, "HUM"))
+        self.ax_history.append(self._history_value(data, "AX"))
+        self.ay_history.append(self._history_value(data, "AY"))
+        self.az_history.append(self._history_value(data, "AZ"))
+        self.gx_history.append(self._history_value(data, "GX"))
+        self.gy_history.append(self._history_value(data, "GY"))
+        self.gz_history.append(self._history_value(data, "GZ"))
 
     @staticmethod
     def c_to_f(celsius):
@@ -415,119 +563,180 @@ class GroundStationWindow(QMainWindow):
         return pitch, roll
 
     def refresh_gui(self):
+        self.refresh_connection_styles()
+        self.refresh_telemetry_state()
+
         data = self.latest_data
         if not data:
             return
 
-        temp = data.get("TEMP")
+        temp_f = self.c_to_f(data.get("TEMP"))
+        self.temp_label["value"].setText("-- °F" if temp_f is None else f"{temp_f:.2f} °F")
+
         press = data.get("PRESS")
+        self.press_label["value"].setText("-- hPa" if press is None else f"{press:.2f} hPa")
+
         hum = data.get("HUM")
-        uptime = data.get("TIME", 0.0)
+        self.hum_label["value"].setText("-- %" if hum is None else f"{hum:.2f} %")
 
-        temp_f = self.c_to_f(temp)
-        if temp_f is not None:
-            self.temp_label["value"].setText(f"{temp_f:.2f} °F")
-        if press is not None:
-            self.press_label["value"].setText(f"{press:.2f} hPa")
-        if hum is not None:
-            self.hum_label["value"].setText(f"{hum:.2f} %")
-
-        self.uptime_label["value"].setText(f"{uptime / 1000.0:.1f} s")
+        uptime = data.get("TIME")
+        self.uptime_label["value"].setText("-- s" if uptime is None else f"{uptime / 1000.0:.1f} s")
         self.packet_label["value"].setText(str(self.stats.total_packets))
-        self.rate_label["value"].setText(f"{self.stats.packet_rate_hz:.2f} Hz")
+        self.rate_label["value"].setText(f"{self.stats.average_packet_rate_hz:.2f} Hz")
+        self.loss_label["value"].setText(f"{self.stats.packet_loss_percent:.2f} %")
 
         status = data.get("STATUS", data.get("STATE", "UNKNOWN"))
         self.system_status_label.setText(status)
+        self.style_state_label(self.system_status_label, status)
 
-        self.bme_health["value"].setText(data.get("BME", "UNKNOWN"))
-        self.imu_health["value"].setText(data.get("IMU", "UNKNOWN"))
-        self.aux_health["value"].setText(data.get("AUX", "UNKNOWN"))
+        bme = data.get("BME", "UNKNOWN")
+        imu = data.get("IMU", "UNKNOWN")
+        aux = data.get("AUX", "UNKNOWN")
+        self.bme_health["value"].setText(bme)
+        self.imu_health["value"].setText(imu)
+        self.aux_health["value"].setText(aux)
+        self.style_health_card(self.bme_health, bme)
+        self.style_health_card(self.imu_health, imu)
+        self.style_health_card(self.aux_health, aux)
 
         pitch, roll = self.calculate_pitch_roll(data)
         self.pitch_label["value"].setText("-- °" if pitch is None else f"{pitch:.1f} °")
         self.roll_label["value"].setText("-- °" if roll is None else f"{roll:.1f} °")
 
-        total_expected = self.stats.total_packets + self.stats.lost_packets
-        loss_pct = (
-            (self.stats.lost_packets / total_expected) * 100.0
-            if total_expected else 0.0
-        )
-        self.loss_label["value"].setText(f"{loss_pct:.2f} %")
-
-        self.lost_packets_label.setText(str(self.stats.lost_packets))
-        self.malformed_packets_label.setText(str(self.stats.malformed_packets))
-        self.reconnects_label.setText(str(self.stats.serial_reconnects))
-
-        if self.stats.min_temperature is not None:
-            self.min_temp_label.setText(
-                f"{self.c_to_f(self.stats.min_temperature):.2f} °F"
-            )
-        if self.stats.max_temperature is not None:
-            self.max_temp_label.setText(
-                f"{self.c_to_f(self.stats.max_temperature):.2f} °F"
-            )
-
-        self.peak_accel_label.setText(f"{self.stats.peak_acceleration:.3f} g")
-        self.peak_gyro_label.setText(f"{self.stats.peak_gyro:.2f} °/s")
-
-        self.refresh_telemetry_state()
+        self.refresh_diagnostics(data)
         self.refresh_plots()
 
-    def refresh_telemetry_state(self):
-        if not self.serial_manager.connected:
-            self.telemetry_state_label.setText("NO DATA")
-            return
+    def refresh_diagnostics(self, data):
+        values = self.diag_values
+        values["lost"].setText(str(self.stats.lost_packets))
+        values["malformed"].setText(str(self.stats.malformed_packets))
+        values["connections"].setText(str(self.stats.serial_reconnects))
+        values["duration"].setText(f"{self.stats.session_duration_seconds:.1f} s")
 
-        if self.last_packet_wall_time is None:
-            self.telemetry_state_label.setText("WAITING")
-            return
+        min_temp = self.c_to_f(self.stats.min_temperature)
+        max_temp = self.c_to_f(self.stats.max_temperature)
+        values["min_temp"].setText("--" if min_temp is None else f"{min_temp:.2f} °F")
+        values["max_temp"].setText("--" if max_temp is None else f"{max_temp:.2f} °F")
+        values["peak_accel"].setText(f"{self.stats.peak_acceleration:.3f} g")
+        values["peak_gyro"].setText(f"{self.stats.peak_gyro:.2f} °/s")
 
-        age = time.time() - self.last_packet_wall_time
-        if age > STALE_TIMEOUT_SECONDS:
-            self.telemetry_state_label.setText("STALE")
-            if not self.stale_reported:
-                self.add_event("WARN", f"Telemetry stale for {age:.1f} s")
-                self.stale_reported = True
-        else:
-            self.telemetry_state_label.setText("LIVE")
-
-    @staticmethod
-    def valid_series(values, transform=None):
-        output = []
-        for value in values:
-            if value is None:
-                output.append(float("nan"))
-            elif transform:
-                output.append(transform(value))
-            else:
-                output.append(value)
-        return output
+        values["fw"].setText(str(data.get("FW", "--")))
+        values["rate"].setText(f"{self.commanded_rate_ms} ms")
+        values["paused"].setText("YES" if self.device_paused else "NO")
+        values["i2c"].setText(str(int(float(data.get("I2C_ERR", 0) or 0))))
+        values["recovery"].setText(str(int(float(data.get("RECOVERY", 0) or 0))))
+        values["bme_fail"].setText(str(int(float(data.get("BME_FAIL", 0) or 0))))
+        values["imu_fail"].setText(str(int(float(data.get("IMU_FAIL", 0) or 0))))
+        values["crc"].setText("VALID" if data.get("CRC_VALID") else "LEGACY")
 
     def refresh_plots(self):
         x = list(self.time_history)
         if not x:
             return
 
-        self.temp_curve.setData(x, self.valid_series(self.temp_history, self.c_to_f))
-        self.press_curve.setData(x, self.valid_series(self.press_history))
-        self.hum_curve.setData(x, self.valid_series(self.hum_history))
+        temp_f_history = [
+            self.c_to_f(value) if not math.isnan(value) else float("nan")
+            for value in self.temp_history
+        ]
 
-        self.ax_curve.setData(x, self.valid_series(self.ax_history))
-        self.ay_curve.setData(x, self.valid_series(self.ay_history))
-        self.az_curve.setData(x, self.valid_series(self.az_history))
+        self.temp_curve.setData(x, temp_f_history)
+        self.press_curve.setData(x, list(self.press_history))
+        self.hum_curve.setData(x, list(self.hum_history))
+        self.ax_curve.setData(x, list(self.ax_history))
+        self.ay_curve.setData(x, list(self.ay_history))
+        self.az_curve.setData(x, list(self.az_history))
+        self.gx_curve.setData(x, list(self.gx_history))
+        self.gy_curve.setData(x, list(self.gy_history))
+        self.gz_curve.setData(x, list(self.gz_history))
 
-        self.gx_curve.setData(x, self.valid_series(self.gx_history))
-        self.gy_curve.setData(x, self.valid_series(self.gy_history))
-        self.gz_curve.setData(x, self.valid_series(self.gz_history))
+    def refresh_connection_styles(self):
+        connected = self.serial_manager.connected
+        self.connection_label.setText("CONNECTED" if connected else "DISCONNECTED")
+        self.connection_label.setStyleSheet(
+            self.label_style("#153d24", "#8ff0a4") if connected
+            else self.label_style("#3d1c1c", "#ff9b9b")
+        )
+
+    def refresh_telemetry_state(self):
+        if not self.serial_manager.connected:
+            self.telemetry_state_label.setText("NO DATA")
+            self.telemetry_state_label.setStyleSheet(self.label_style("#2b2b2b", "#bdbdbd"))
+            return
+
+        if self.device_paused:
+            self.telemetry_state_label.setText("PAUSED")
+            self.telemetry_state_label.setStyleSheet(self.label_style("#3b3517", "#ffe58a"))
+            return
+
+        if self.last_packet_wall_time is None:
+            self.telemetry_state_label.setText("WAITING")
+            self.telemetry_state_label.setStyleSheet(self.label_style("#2b2b2b", "#bdbdbd"))
+            return
+
+        timeout = max(
+            DEFAULT_STALE_TIMEOUT_SECONDS,
+            (self.commanded_rate_ms / 1000.0) * 3.0,
+        )
+        age = time.time() - self.last_packet_wall_time
+
+        if age > timeout:
+            self.telemetry_state_label.setText("STALE")
+            self.telemetry_state_label.setStyleSheet(self.label_style("#4a2811", "#ffbd76"))
+            if not self.stale_reported:
+                self.stale_reported = True
+                self.add_event("WARN", f"Telemetry stale for {age:.1f} s")
+        else:
+            self.telemetry_state_label.setText("LIVE")
+            self.telemetry_state_label.setStyleSheet(self.label_style("#153d24", "#8ff0a4"))
+
+    @staticmethod
+    def label_style(background, foreground):
+        return (
+            f"font-weight: 700; padding: 3px 6px; border-radius: 4px; "
+            f"background: {background}; color: {foreground};"
+        )
+
+    def style_state_label(self, label, state):
+        styles = {
+            "NORMAL": ("#153d24", "#8ff0a4"),
+            "DEGRADED": ("#4a3811", "#ffe08a"),
+            "FAULT": ("#4a1818", "#ff8d8d"),
+        }
+        background, foreground = styles.get(state, ("#2b2b2b", "#bdbdbd"))
+        label.setStyleSheet(self.label_style(background, foreground))
+
+    def style_health_card(self, card, state):
+        styles = {
+            "OK": ("#153d24", "#8ff0a4"),
+            "PRESENT": ("#15333d", "#91d7f5"),
+            "FAULT": ("#4a1818", "#ff8d8d"),
+            "ABSENT": ("#4a3811", "#ffe08a"),
+        }
+        background, foreground = styles.get(state, ("#2b2b2b", "#bdbdbd"))
+        card["value"].setStyleSheet(
+            f"font-size: 16px; font-weight: 700; color: {foreground};"
+        )
+        card["box"].setStyleSheet(
+            f"QGroupBox {{ background: {background}; border-radius: 4px; }}"
+        )
+
+    def update_control_state(self):
+        connected = self.serial_manager.connected
+        for widget in self.device_controls:
+            widget.setEnabled(connected)
+        self.logging_button.setEnabled(connected or self.logger.logging_enabled)
+
+    def reset_statistics(self):
+        connections = self.stats.serial_reconnects
+        self.stats.reset()
+        self.stats.serial_reconnects = connections
+        self.add_event("INFO", "Ground-station statistics reset")
 
     def toggle_logging(self):
         if self.logger.logging_enabled:
             self.logger.stop(
                 stats=self.stats,
-                device_info={
-                    "port": self.serial_manager.port,
-                    "baud": self.serial_manager.baud,
-                },
+                device_info=self.device_info(),
             )
             self.logging_button.setText("Start Logging")
             self.add_event("INFO", "Logging stopped")
@@ -537,8 +746,18 @@ class GroundStationWindow(QMainWindow):
         self.logging_button.setText("Stop Logging")
         self.add_event("INFO", "Logging started")
 
+    def device_info(self):
+        return {
+            "port": self.serial_manager.port,
+            "baud": self.serial_manager.baud,
+            "firmware": self.latest_data.get("FW"),
+            "rate_ms": self.commanded_rate_ms,
+        }
+
     def send_command(self, command):
         success = self.serial_manager.send(command)
+        timestamp = time.strftime("%H:%M:%S")
+        self.raw_log.appendPlainText(f"[{timestamp}] TX {command}")
 
         if success:
             self.add_event("TX", command)
@@ -549,7 +768,8 @@ class GroundStationWindow(QMainWindow):
 
     def send_rate_command(self):
         try:
-            self.send_command(command_set_rate(self.rate_spin.value()))
+            command = command_set_rate(self.rate_spin.value())
+            self.send_command(command)
         except ValueError as error:
             self.add_event("ERROR", str(error))
 
@@ -561,18 +781,15 @@ class GroundStationWindow(QMainWindow):
         if self.logger.logging_enabled:
             self.logger.stop(
                 stats=self.stats,
-                device_info={
-                    "port": self.serial_manager.port,
-                    "baud": self.serial_manager.baud,
-                },
+                device_info=self.device_info(),
             )
 
         self.serial_manager.disconnect()
         event.accept()
 
 
-def run():
+def run(serial_manager=None):
     app = QApplication(sys.argv)
-    window = GroundStationWindow()
+    window = GroundStationWindow(serial_manager=serial_manager)
     window.show()
     sys.exit(app.exec())
