@@ -12,11 +12,12 @@ __pycache__/
 *.pyd
 .venv/
 venv/
+.pytest_cache/
+.coverage
+htmlcov/
 
-# Logs and local outputs
+# Runtime logs and local outputs
 logs/
-*.csv
-*.json
 
 # OS files
 .DS_Store
