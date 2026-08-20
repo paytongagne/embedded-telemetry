@@ -46,6 +46,18 @@ class CommandIntegrationTests(unittest.TestCase):
         self.assertTrue(any(line.startswith("ERR,RATE_RANGE") for line in lines))
         self.assertEqual(self.device.rate_ms, 1000)
 
+    def test_missing_rate_is_rejected(self):
+        self.device.send("CMD,SET_RATE")
+        self.assertIn("ERR,MISSING_VALUE,SET_RATE", self._drain())
+
+    def test_bad_fault_target_is_rejected(self):
+        self.device.send("CMD,INJECT_FAULT,AUX")
+        self.assertIn("ERR,BAD_TARGET,AUX", self._drain())
+
+    def test_unknown_command_is_rejected(self):
+        self.device.send("CMD,LAUNCH")
+        self.assertIn("ERR,UNKNOWN_COMMAND,LAUNCH", self._drain())
+
     def test_command_requires_connection(self):
         self.device.connected = False
         self.assertFalse(self.device.send("CMD,STATUS"))
