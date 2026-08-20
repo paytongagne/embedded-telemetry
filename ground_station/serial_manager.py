@@ -23,7 +23,6 @@ class SerialManager:
         self.running = False
         self.connected = False
         self.auto_reconnect = True
-
         self.reconnect_delay = 2.0
 
         self.line_queue = queue.Queue()
@@ -46,24 +45,27 @@ class SerialManager:
 
         return ports
 
+    def _open_port(self):
+        self.serial = serial.Serial(
+            self.port,
+            self.baud,
+            timeout=self.timeout,
+            write_timeout=1,
+        )
+
+        self.connected = True
+
+        self.event_queue.put(
+            ("CONNECTED", self.port)
+        )
+
     def connect(self):
         if self.connected:
             return True
 
         try:
-            self.serial = serial.Serial(
-                self.port,
-                self.baud,
-                timeout=self.timeout,
-                write_timeout=1,
-            )
-
-            self.connected = True
+            self._open_port()
             self.running = True
-
-            self.event_queue.put(
-                ("CONNECTED", self.port)
-            )
 
             if self.thread is None or not self.thread.is_alive():
                 self.thread = threading.Thread(
@@ -74,8 +76,9 @@ class SerialManager:
 
             return True
 
-        except serial.SerialException as error:
+        except (serial.SerialException, OSError) as error:
             self.connected = False
+            self.serial = None
 
             self.event_queue.put(
                 ("ERROR", str(error))
@@ -93,7 +96,7 @@ class SerialManager:
         if self.serial:
             try:
                 self.serial.close()
-            except serial.SerialException:
+            except (serial.SerialException, OSError):
                 pass
 
         self.serial = None
@@ -105,7 +108,6 @@ class SerialManager:
 
     def reconnect(self):
         self.disconnect()
-
         time.sleep(0.25)
 
         self.auto_reconnect = True
@@ -129,19 +131,35 @@ class SerialManager:
 
             return True
 
-        except serial.SerialException as error:
+        except (serial.SerialException, OSError) as error:
             self.event_queue.put(
                 ("ERROR", str(error))
             )
 
             self._connection_lost()
-
             return False
 
     def _reader_loop(self):
         while self.running:
             if not self.connected:
-                time.sleep(0.1)
+                if not self.auto_reconnect:
+                    time.sleep(0.1)
+                    continue
+
+                time.sleep(self.reconnect_delay)
+
+                if not self.running or self.connected:
+                    continue
+
+                try:
+                    self._open_port()
+                except (serial.SerialException, OSError) as error:
+                    self.serial = None
+                    self.connected = False
+                    self.event_queue.put(
+                        ("ERROR", f"Reconnect failed: {error}")
+                    )
+
                 continue
 
             try:
@@ -167,7 +185,6 @@ class SerialManager:
 
     def _connection_lost(self):
         was_connected = self.connected
-
         self.connected = False
 
         if self.serial:
