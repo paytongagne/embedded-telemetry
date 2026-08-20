@@ -4,6 +4,8 @@
 
 A hardware-validated embedded telemetry platform that acquires environmental and inertial sensor data over I2C, performs device health monitoring and fault recovery, streams CRC-protected telemetry over UART, and exposes a desktop ground station for real-time visualization, command/control, diagnostics, logging, and fault injection.
 
+![v1.0 hardware dashboard](docs/images/dashboard-v1.webp)
+
 ## What It Demonstrates
 
 - embedded C++ architecture on an ESP8285 using PlatformIO/Arduino
