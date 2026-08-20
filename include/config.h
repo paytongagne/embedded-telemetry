@@ -11,5 +11,5 @@ constexpr uint32_t DEFAULT_TELEMETRY_INTERVAL_MS = 1000;
 constexpr uint32_t MIN_TELEMETRY_INTERVAL_MS = 100;
 constexpr uint32_t MAX_TELEMETRY_INTERVAL_MS = 10000;
 constexpr uint32_t HEALTH_CHECK_INTERVAL_MS = 5000;
-constexpr const char *FIRMWARE_VERSION = "0.6.0";
+constexpr const char *FIRMWARE_VERSION = "1.0.0";
 }
