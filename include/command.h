@@ -5,6 +5,17 @@
 #include "sensors.h"
 #include "system_state.h"
 
-void printStatus(const SensorManager &sensors, const RuntimeState &runtime);
-void processCommand(String line, SensorManager &sensors, RuntimeState &runtime);
+void printStatus(
+    const SensorManager &sensors,
+    const RuntimeState &runtime,
+    Print &output
+);
+
+void processCommand(
+    String line,
+    SensorManager &sensors,
+    RuntimeState &runtime,
+    Print &output
+);
+
 void processSerialInput(SensorManager &sensors, RuntimeState &runtime);
