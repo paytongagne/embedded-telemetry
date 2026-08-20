@@ -56,6 +56,7 @@ def parse_telemetry(line):
     if not line.startswith("TEL,"):
         return None
 
+    has_crc = ",CRC=" in line
     if not verify_crc(line):
         return None
 
@@ -71,7 +72,7 @@ def parse_telemetry(line):
 
     data = {
         "sequence": sequence,
-        "CRC_VALID": True,
+        "CRC_VALID": True if has_crc else None,
     }
 
     for item in parts[2:]:
