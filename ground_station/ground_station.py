@@ -1,14 +1,41 @@
+import argparse
 import sys
 
 from ground_station.app import run
 from ground_station.demo_serial import DemoSerialManager
+from ground_station.mqtt_manager import MqttManager
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Embedded Telemetry Ground Station")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--demo", action="store_true", help="Use the hardware-free simulator")
+    mode.add_argument("--mqtt", metavar="HOST", help="Connect through an MQTT broker")
+    parser.add_argument("--mqtt-port", type=int, default=1883)
+    parser.add_argument("--device", default="esp8285-node")
+    parser.add_argument("--mqtt-user")
+    parser.add_argument("--mqtt-password")
+    return parser.parse_args()
 
 
 def main():
-    demo_mode = "--demo" in sys.argv
+    args = parse_args()
+    sys.argv = [sys.argv[0]]
 
-    if demo_mode:
+    if args.demo:
         run(serial_manager=DemoSerialManager())
+        return
+
+    if args.mqtt:
+        run(
+            serial_manager=MqttManager(
+                host=args.mqtt,
+                port=args.mqtt_port,
+                device_id=args.device,
+                username=args.mqtt_user,
+                password=args.mqtt_password,
+            )
+        )
         return
 
     run()
