@@ -13,6 +13,7 @@ NUMERIC_KEYS = {
     "TOF_TIMEOUT",
     "I2C_ERR",
     "RECOVERY",
+    "RECOVERY_ATTEMPTS",
     "BME_FAIL",
     "IMU_FAIL",
 }
