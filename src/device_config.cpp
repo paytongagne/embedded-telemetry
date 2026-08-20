@@ -79,5 +79,5 @@ void DeviceConfigStore::reset() {
 }
 
 bool DeviceConfigStore::isConfigured() const {
-    return config_.mqttHost[0] != '\0' && config_.deviceId[0] != '\0';
+    return config_.deviceId[0] != '\0';
 }
