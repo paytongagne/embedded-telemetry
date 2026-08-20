@@ -21,12 +21,21 @@ uint16_t crc16Ccitt(const String &payload) {
 }
 
 static String crcHex(uint16_t crc) {
-    String value = String(crc, HEX);
+    String value(crc, HEX);
     value.toUpperCase();
+
     while (value.length() < 4) {
-        value = "0" + value;
+        value = String("0") + value;
     }
+
     return value;
+}
+
+static void appendField(String &packet, const char *name, const String &value) {
+    packet += ",";
+    packet += name;
+    packet += "=";
+    packet += value;
 }
 
 String buildTelemetryPacket(SensorManager &sensors, RuntimeState &runtime) {
@@ -38,44 +47,40 @@ String buildTelemetryPacket(SensorManager &sensors, RuntimeState &runtime) {
 
     String packet = "TEL,";
     packet += String(runtime.sequenceNumber);
-    packet += ",TIME=" + String(millis());
+    appendField(packet, "TIME", String(millis()));
 
     if (environment.valid) {
-        packet += ",TEMP=" + String(environment.temperature, 2);
-        packet += ",PRESS=" + String(environment.pressure, 2);
-        packet += ",HUM=" + String(environment.humidity, 2);
+        appendField(packet, "TEMP", String(environment.temperature, 2));
+        appendField(packet, "PRESS", String(environment.pressure, 2));
+        appendField(packet, "HUM", String(environment.humidity, 2));
     }
 
     if (motion.valid) {
-        packet += ",AX=" + String(motion.ax, 3);
-        packet += ",AY=" + String(motion.ay, 3);
-        packet += ",AZ=" + String(motion.az, 3);
-        packet += ",GX=" + String(motion.gx, 2);
-        packet += ",GY=" + String(motion.gy, 2);
-        packet += ",GZ=" + String(motion.gz, 2);
+        appendField(packet, "AX", String(motion.ax, 3));
+        appendField(packet, "AY", String(motion.ay, 3));
+        appendField(packet, "AZ", String(motion.az, 3));
+        appendField(packet, "GX", String(motion.gx, 2));
+        appendField(packet, "GY", String(motion.gy, 2));
+        appendField(packet, "GZ", String(motion.gz, 2));
     }
 
-    packet += ",BME=";
-    packet += sensors.bmeHealthy() ? "OK" : "FAULT";
-    packet += ",IMU=";
-    packet += sensors.imuHealthy() ? "OK" : "FAULT";
-    packet += ",AUX=";
-    packet += sensors.auxPresent() ? "PRESENT" : "ABSENT";
-    packet += ",I2C_ERR=" + String(counters.i2cErrors);
-    packet += ",RECOVERY=" + String(counters.successfulRecoveries);
-    packet += ",BME_FAIL=" + String(counters.bmeFailures);
-    packet += ",IMU_FAIL=" + String(counters.imuFailures);
+    appendField(packet, "BME", sensors.bmeHealthy() ? "OK" : "FAULT");
+    appendField(packet, "IMU", sensors.imuHealthy() ? "OK" : "FAULT");
+    appendField(packet, "AUX", sensors.auxPresent() ? "PRESENT" : "ABSENT");
+    appendField(packet, "I2C_ERR", String(counters.i2cErrors));
+    appendField(packet, "RECOVERY", String(counters.successfulRecoveries));
+    appendField(packet, "BME_FAIL", String(counters.bmeFailures));
+    appendField(packet, "IMU_FAIL", String(counters.imuFailures));
 
     const SystemState state = determineSystemState(
         sensors.bmeHealthy(),
         sensors.imuHealthy()
     );
 
-    packet += ",STATUS=";
-    packet += stateToString(state);
+    appendField(packet, "STATUS", stateToString(state));
 
     const uint16_t crc = crc16Ccitt(packet);
-    packet += ",CRC=" + crcHex(crc);
+    appendField(packet, "CRC", crcHex(crc));
     return packet;
 }
 
