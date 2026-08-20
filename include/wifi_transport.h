@@ -18,6 +18,7 @@ public:
     bool enabled() const;
     bool wifiConnected() const;
     bool mqttConnected() const;
+    bool directClientConnected() const;
     bool configured() const;
     String deviceId() const;
     String ipAddress() const;
@@ -29,6 +30,7 @@ private:
     void configureMqttClient();
     void serviceWifi();
     void serviceMqtt();
+    void serviceDirectClient();
     void subscribeTopics();
     void processPendingCommand(SensorManager &sensors, RuntimeState &runtime);
     void publishResponseLines(const String &buffer);
@@ -39,4 +41,5 @@ private:
     unsigned long lastWifiAttemptMs_ = 0;
     unsigned long lastMqttAttemptMs_ = 0;
     String pendingCommand_;
+    String directInputBuffer_;
 };
