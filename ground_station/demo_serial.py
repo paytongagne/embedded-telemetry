@@ -69,7 +69,7 @@ class DemoSerialManager:
         parts = command.split(",")
 
         if len(parts) < 2 or parts[0] != "CMD":
-            self.line_queue.put("ERR,BAD_FORMAT")
+            self.line_queue.put(f"ERR,BAD_FORMAT,{command}")
             return True
 
         name = parts[1].upper()
@@ -86,7 +86,11 @@ class DemoSerialManager:
             self.paused = False
             self.line_queue.put("ACK,RESUME")
             self._queue_status()
-        elif name == "SET_RATE" and value is not None:
+        elif name == "SET_RATE":
+            if value is None:
+                self.line_queue.put("ERR,MISSING_VALUE,SET_RATE")
+                return True
+
             try:
                 requested = int(value)
             except ValueError:
@@ -99,11 +103,16 @@ class DemoSerialManager:
                 self.rate_ms = requested
                 self.line_queue.put(f"ACK,SET_RATE,{requested}")
                 self._queue_status()
-        elif name == "INJECT_FAULT" and value in {"IMU", "BME"}:
+        elif name == "INJECT_FAULT":
+            if value not in {"IMU", "BME"}:
+                self.line_queue.put(f"ERR,BAD_TARGET,{value or ''}")
+                return True
+
             if value == "IMU":
                 self.imu_fault = True
             else:
                 self.bme_fault = True
+
             self.line_queue.put(f"ACK,INJECT_FAULT,{value}")
             self._queue_status()
         elif name == "CLEAR_FAULTS":
@@ -182,7 +191,8 @@ class DemoSerialManager:
         packet += (
             f",BME={'FAULT' if self.bme_fault else 'OK'},"
             f"IMU={'FAULT' if self.imu_fault else 'OK'},"
-            "AUX=PRESENT,I2C_ERR=0,RECOVERY=0,BME_FAIL=0,IMU_FAIL=0,"
+            "AUX=PRESENT,I2C_ERR=0,RECOVERY=0,RECOVERY_ATTEMPTS=0,"
+            "BME_FAIL=0,IMU_FAIL=0,"
             f"STATUS={self._state()}"
         )
 
