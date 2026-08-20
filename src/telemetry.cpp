@@ -69,6 +69,7 @@ String buildTelemetryPacket(SensorManager &sensors, RuntimeState &runtime) {
     appendField(packet, "AUX", sensors.auxPresent() ? "PRESENT" : "ABSENT");
     appendField(packet, "I2C_ERR", String(counters.i2cErrors));
     appendField(packet, "RECOVERY", String(counters.successfulRecoveries));
+    appendField(packet, "RECOVERY_ATTEMPTS", String(counters.recoveryAttempts));
     appendField(packet, "BME_FAIL", String(counters.bmeFailures));
     appendField(packet, "IMU_FAIL", String(counters.imuFailures));
 
