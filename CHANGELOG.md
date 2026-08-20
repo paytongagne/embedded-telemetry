@@ -21,7 +21,7 @@
 - added stale-telemetry detection that scales with commanded packet rate
 - added reset-statistics control and connection-aware command controls
 - added BME fault injection control
-- added optional OpenGL attitude view with a 2D fallback
+- added optional OpenGL attitude view with a hardened 2D fallback
 - retained Fahrenheit presentation while logging protocol-native Celsius values
 
 ### Testing and tooling
@@ -30,5 +30,5 @@
 - added packet-loss and rolling-rate tests
 - added simulated command/state tests
 - added hardware-free telemetry simulator and simulator tests
-- added GitHub Actions Python validation and ESP8285 PlatformIO builds
+- added GitHub Actions Python syntax/unit validation and ESP8285 PlatformIO builds
 - added requirements, architecture, hardware, protocol, fault-management, and testing documentation
