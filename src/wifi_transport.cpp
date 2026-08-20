@@ -10,8 +10,11 @@
 #include "wifi_config.h"
 
 namespace {
-WiFiClient wifiClient;
-PubSubClient mqttClient(wifiClient);
+WiFiClient mqttWifiClient;
+PubSubClient mqttClient(mqttWifiClient);
+WiFiServer directServer(wifi_config::DIRECT_TCP_PORT);
+WiFiClient directClient;
+bool directServerStarted = false;
 WifiTransport *activeTransport = nullptr;
 
 String makeTopic(const String &deviceId, const char *suffix) {
@@ -63,7 +66,7 @@ bool WifiTransport::runProvisioning() {
 
     WiFiManagerParameter mqttHostParam(
         "mqtt_host",
-        "MQTT broker host or IP",
+        "MQTT broker host or IP (optional)",
         config.mqttHost,
         sizeof(config.mqttHost)
     );
@@ -109,7 +112,7 @@ bool WifiTransport::runProvisioning() {
     });
 
     const String accessPoint = setupAccessPointName();
-    const bool needsInitialSetup = !configStore_.isConfigured();
+    const bool needsInitialSetup = !configurationLoaded_;
 
     Serial.println();
     if (needsInitialSetup) {
@@ -149,13 +152,17 @@ bool WifiTransport::runProvisioning() {
     Serial.println(WiFi.SSID());
     Serial.print("IP address: ");
     Serial.println(WiFi.localIP());
-    return configStore_.isConfigured();
+    Serial.print("Direct ground station: ");
+    Serial.print(WiFi.localIP());
+    Serial.print(":");
+    Serial.println(wifi_config::DIRECT_TCP_PORT);
+    return true;
 }
 
 void WifiTransport::configureMqttClient() {
     const DeviceConfig &config = configStore_.config();
 
-    if (!configStore_.isConfigured()) {
+    if (config.mqttHost[0] == '\0') {
         return;
     }
 
@@ -187,7 +194,7 @@ void WifiTransport::queueCommand(const String &command) {
 }
 
 void WifiTransport::serviceWifi() {
-    if (!configured() || WiFi.status() == WL_CONNECTED) {
+    if (WiFi.status() == WL_CONNECTED) {
         return;
     }
 
@@ -201,7 +208,8 @@ void WifiTransport::serviceWifi() {
 }
 
 void WifiTransport::serviceMqtt() {
-    if (!configured() || WiFi.status() != WL_CONNECTED) {
+    const DeviceConfig &config = configStore_.config();
+    if (config.mqttHost[0] == '\0' || WiFi.status() != WL_CONNECTED) {
         return;
     }
 
@@ -216,7 +224,6 @@ void WifiTransport::serviceMqtt() {
     }
     lastMqttAttemptMs_ = now;
 
-    const DeviceConfig &config = configStore_.config();
     const String clientId = String("embedded-telemetry-") + config.deviceId;
     const String availability = makeTopic(config.deviceId, "availability");
 
@@ -251,6 +258,56 @@ void WifiTransport::serviceMqtt() {
     }
 }
 
+void WifiTransport::serviceDirectClient() {
+    if (WiFi.status() != WL_CONNECTED) {
+        if (directClient) {
+            directClient.stop();
+        }
+        return;
+    }
+
+    if (!directServerStarted) {
+        directServer.begin();
+        directServer.setNoDelay(true);
+        directServerStarted = true;
+    }
+
+    if (!directClient || !directClient.connected()) {
+        WiFiClient candidate = directServer.available();
+        if (candidate) {
+            if (directClient) {
+                directClient.stop();
+            }
+            directClient = candidate;
+            directClient.setNoDelay(true);
+            directInputBuffer_ = "";
+            Serial.println("Direct WiFi ground station connected.");
+        }
+        return;
+    }
+
+    while (directClient.available() > 0) {
+        const char value = static_cast<char>(directClient.read());
+        if (value == '\r') {
+            continue;
+        }
+        if (value == '\n') {
+            directInputBuffer_.trim();
+            if (directInputBuffer_.length() > 0) {
+                queueCommand(directInputBuffer_);
+            }
+            directInputBuffer_ = "";
+            continue;
+        }
+
+        if (directInputBuffer_.length() < 255) {
+            directInputBuffer_ += value;
+        } else {
+            directInputBuffer_ = "";
+        }
+    }
+}
+
 void WifiTransport::subscribeTopics() {
     if (!mqttClient.connected()) {
         return;
@@ -273,7 +330,7 @@ void WifiTransport::processPendingCommand(SensorManager &sensors, RuntimeState &
 }
 
 void WifiTransport::publishResponseLines(const String &buffer) {
-    if (!mqttClient.connected() || buffer.length() == 0) {
+    if (buffer.length() == 0) {
         return;
     }
 
@@ -288,7 +345,12 @@ void WifiTransport::publishResponseLines(const String &buffer) {
         String line = buffer.substring(start, end);
         line.trim();
         if (line.length() > 0) {
-            mqttClient.publish(topic.c_str(), line.c_str(), false);
+            if (mqttClient.connected()) {
+                mqttClient.publish(topic.c_str(), line.c_str(), false);
+            }
+            if (directClient && directClient.connected()) {
+                directClient.println(line);
+            }
         }
         start = end + 1;
     }
@@ -297,12 +359,16 @@ void WifiTransport::publishResponseLines(const String &buffer) {
 void WifiTransport::loop(SensorManager &sensors, RuntimeState &runtime) {
     serviceWifi();
     serviceMqtt();
+    serviceDirectClient();
     processPendingCommand(sensors, runtime);
 }
 
 void WifiTransport::publishTelemetry(const String &packet) {
     if (mqttClient.connected()) {
         mqttClient.publish(makeTopic(deviceId(), "telemetry").c_str(), packet.c_str(), false);
+    }
+    if (directClient && directClient.connected()) {
+        directClient.println(packet);
     }
 }
 
@@ -318,8 +384,12 @@ bool WifiTransport::mqttConnected() const {
     return mqttClient.connected();
 }
 
+bool WifiTransport::directClientConnected() const {
+    return directClient && directClient.connected();
+}
+
 bool WifiTransport::configured() const {
-    return configStore_.isConfigured();
+    return configurationLoaded_ || provisioningSucceeded_;
 }
 
 String WifiTransport::deviceId() const {
