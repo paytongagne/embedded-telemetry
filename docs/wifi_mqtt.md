@@ -1,6 +1,6 @@
-# WiFi and MQTT Transport
+# WiFi, Provisioning, and MQTT Transport
 
-Version 1.1 adds an optional WiFi transport while preserving the proven USB/UART path.
+Version 1.1 adds WiFi/MQTT transport while preserving the proven USB/UART path.
 
 ## Architecture
 
@@ -16,7 +16,37 @@ CP2102   MQTT broker
  +---- Ground Station
 ```
 
-The same telemetry packet and command protocol are used on both transports. This keeps CRC validation, fault injection, state handling, logging, and diagnostics transport-independent.
+The same telemetry packet and command protocol are used on both transports. CRC validation, fault injection, state handling, logging, and diagnostics stay transport-independent.
+
+## First-Boot Provisioning
+
+Users no longer edit firmware source code to enter WiFi credentials.
+
+When the ESP8285 has no saved wireless configuration, it starts a temporary setup access point named like:
+
+```text
+EmbeddedTelemetry-Setup-1A2B3C
+```
+
+Connect to that network from a laptop or phone. The WiFiManager captive portal opens automatically on most devices. If it does not, open the gateway page offered by the setup network.
+
+The setup form contains:
+
+- WiFi network and password
+- MQTT broker host or IP
+- MQTT port
+- optional MQTT username and password
+- device name / device ID
+
+After saving, WiFiManager stores the WiFi credentials using the ESP8266 WiFi stack and this project stores the MQTT/device fields in ESP flash-backed EEPROM. The device then joins the selected network and starts MQTT service.
+
+No WiFi password or MQTT credential file is required in the repository.
+
+## Normal Boot
+
+On later boots the device loads the saved MQTT/device configuration and reconnects using the stored WiFi credentials. If the saved WiFi network is unavailable, WiFiManager can expose the setup portal again after the normal connection attempt fails.
+
+USB telemetry remains available even when wireless provisioning times out or the broker is unavailable.
 
 ## MQTT Topics
 
@@ -30,36 +60,6 @@ embedded-telemetry/esp8285-node/availability
 ```
 
 `availability` is retained and publishes `online` when connected. MQTT Last Will publishes `offline` when the broker detects an unexpected disconnect.
-
-## Firmware Configuration
-
-Copy:
-
-```text
-include/wifi_secrets.example.h
-```
-
-to:
-
-```text
-include/wifi_secrets.h
-```
-
-and fill in the local values:
-
-```cpp
-constexpr const char *SSID = "YOUR_WIFI_SSID";
-constexpr const char *PASSWORD = "YOUR_WIFI_PASSWORD";
-constexpr const char *MQTT_HOST = "192.168.1.10";
-constexpr uint16_t MQTT_PORT = 1883;
-constexpr const char *MQTT_USER = "";
-constexpr const char *MQTT_PASSWORD = "";
-constexpr const char *DEVICE_ID = "esp8285-node";
-```
-
-`include/wifi_secrets.h` is gitignored and must never be committed.
-
-If the file is absent, firmware still builds and runs with WiFi transport disabled.
 
 ## Ground Station over MQTT
 
@@ -84,13 +84,13 @@ Optional arguments:
 --mqtt-password PASSWORD
 ```
 
-The existing dashboard, commands, CRC validation, fault injection, logging, and plots are reused without a separate WiFi UI.
+The existing dashboard, commands, CRC validation, fault injection, logging, and plots are reused without a separate telemetry UI.
 
 ## Recommended First Deployment
 
-Use a Mosquitto broker on the same local network as both the ESP8285 and ground-station computer. Start with an isolated/private LAN and no internet exposure.
+Use a Mosquitto broker on the same private LAN as both the ESP8285 and ground-station computer. Start with no internet exposure.
 
-For deployment beyond a trusted LAN, add authenticated TLS rather than exposing plaintext MQTT port 1883 to the internet.
+For deployment beyond a trusted LAN, use authenticated TLS rather than exposing plaintext MQTT port 1883 to the internet.
 
 ## Why MQTT
 
