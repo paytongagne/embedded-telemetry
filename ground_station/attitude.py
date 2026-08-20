@@ -1,4 +1,3 @@
-from PySide6.QtCore import Qt
 from PySide6.QtGui import QBrush, QColor, QPainter, QPen
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
@@ -101,7 +100,6 @@ class GLBoardView(QWidget):
         layout.addWidget(self.view)
 
         grid = gl.GLGridItem()
-        grid.scale(1, 1, 1)
         self.view.addItem(grid)
 
         board_points = np.array(
@@ -126,21 +124,16 @@ class GLBoardView(QWidget):
         )
         self.view.addItem(self.board)
 
-        x_axis = gl.GLLinePlotItem(
-            pos=np.array([[0, 0, 0], [3, 0, 0]], dtype=float),
-            width=2,
-        )
-        y_axis = gl.GLLinePlotItem(
-            pos=np.array([[0, 0, 0], [0, 3, 0]], dtype=float),
-            width=2,
-        )
-        z_axis = gl.GLLinePlotItem(
-            pos=np.array([[0, 0, 0], [0, 0, 3]], dtype=float),
-            width=2,
-        )
-        self.view.addItem(x_axis)
-        self.view.addItem(y_axis)
-        self.view.addItem(z_axis)
+        for endpoint in (
+            [3.0, 0.0, 0.0],
+            [0.0, 3.0, 0.0],
+            [0.0, 0.0, 3.0],
+        ):
+            axis = gl.GLLinePlotItem(
+                pos=np.array([[0.0, 0.0, 0.0], endpoint], dtype=float),
+                width=2,
+            )
+            self.view.addItem(axis)
 
     def set_attitude(self, pitch, roll, valid=True):
         self.board.resetTransform()
@@ -155,7 +148,7 @@ class AttitudePanel(QWidget):
         layout = QVBoxLayout(self)
 
         header = QHBoxLayout()
-        self.mode_label = QLabel("3D OPENGL" if OPENGL_AVAILABLE else "2D FALLBACK")
+        self.mode_label = QLabel()
         self.pitch_label = QLabel("Pitch: -- °")
         self.roll_label = QLabel("Roll: -- °")
 
@@ -165,8 +158,20 @@ class AttitudePanel(QWidget):
         header.addWidget(self.roll_label)
         layout.addLayout(header)
 
-        self.view = GLBoardView() if OPENGL_AVAILABLE else ArtificialHorizon()
+        self.view = self._create_view()
         layout.addWidget(self.view, 1)
+
+    def _create_view(self):
+        if OPENGL_AVAILABLE:
+            try:
+                view = GLBoardView()
+                self.mode_label.setText("3D OPENGL")
+                return view
+            except Exception:
+                pass
+
+        self.mode_label.setText("2D FALLBACK")
+        return ArtificialHorizon()
 
     def set_attitude(self, pitch, roll, valid=True):
         self.view.set_attitude(pitch, roll, valid)
