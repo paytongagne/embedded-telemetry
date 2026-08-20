@@ -59,7 +59,9 @@ class ProtocolTests(unittest.TestCase):
 
     def test_parse_status(self):
         response = parse_response(
-            "STATUS,STATE=NORMAL,BME=OK,IMU=OK,AUX=PRESENT,PAUSED=0,RATE_MS=1000,FW=0.5.0"
+            "STATUS,STATE=NORMAL,BME=OK,IMU=OK,AUX=PRESENT,PAUSED=0,"
+            "RATE_MS=1000,I2C_ERR=0,RECOVERY=0,RECOVERY_ATTEMPTS=0,"
+            "BME_FAIL=0,IMU_FAIL=0,FW=0.6.0"
         )
 
         self.assertEqual(response["type"], "STATUS")
@@ -67,7 +69,8 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(response["BME"], "OK")
         self.assertEqual(response["IMU"], "OK")
         self.assertEqual(response["AUX"], "PRESENT")
-        self.assertEqual(response["FW"], "0.5.0")
+        self.assertEqual(response["RECOVERY_ATTEMPTS"], "0")
+        self.assertEqual(response["FW"], "0.6.0")
 
 
 if __name__ == "__main__":
