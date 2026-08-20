@@ -1,27 +1,27 @@
 # Embedded Telemetry & Fault Management Platform
 
-An ESP8285-based embedded telemetry system that acquires environmental and inertial sensor data over I2C, streams validated telemetry over UART, and provides a Python/PySide6 ground station for real-time monitoring, command/control, fault injection, logging, and diagnostics.
+**Version 1.0.0** | ESP8285 + C++ firmware + Python/PySide6 ground station
 
-## Highlights
+A hardware-validated embedded telemetry platform that acquires environmental and inertial sensor data over I2C, performs device health monitoring and fault recovery, streams CRC-protected telemetry over UART, and exposes a desktop ground station for real-time visualization, command/control, diagnostics, logging, and fault injection.
 
-- ESP8285 firmware written in C++ with PlatformIO/Arduino
-- BME280 environmental telemetry: temperature, pressure, humidity
-- MPU-9250-compatible IMU telemetry: 3-axis acceleration and gyroscope
-- Auxiliary I2C device detection at `0x29` without assuming an unsupported device identity
-- Bidirectional UART command protocol over a CP2102 USB-UART bridge
-- Runtime telemetry-rate control from 100 ms to 10 s
-- `NORMAL`, `DEGRADED`, and `FAULT` system states
-- BME/IMU fault injection and recovery commands
-- Periodic sensor health checks and automatic reinitialization attempts
-- I2C, sensor-failure, and recovery counters
-- CRC-16/CCITT telemetry integrity validation
-- Packet-loss and malformed-packet detection
-- PySide6 + pyqtgraph desktop ground station
-- Fahrenheit display while preserving raw Celsius telemetry/logging
-- Live pitch/roll derived from accelerometer data
-- Raw serial traffic view, CSV event/telemetry logging, and JSON session summaries
-- Built-in hardware-free simulator with the same command interface
-- Automated Python tests and PlatformIO firmware builds in GitHub Actions
+## What It Demonstrates
+
+- embedded C++ architecture on an ESP8285 using PlatformIO/Arduino
+- low-level I2C device communication and sensor characterization
+- BME280 temperature, pressure, and humidity acquisition
+- MPU-9250-compatible acceleration and gyroscope acquisition
+- bidirectional UART protocol over a CP2102 USB-UART bridge
+- CRC-16/CCITT packet integrity validation
+- `NORMAL`, `DEGRADED`, and `FAULT` system-state management
+- periodic health checks, error counters, and automatic sensor reinitialization attempts
+- safe BME/IMU fault injection and recovery testing
+- configurable telemetry rate from 100 ms to 10 s
+- packet-loss, malformed-packet, stale-link, and CRC diagnostics
+- Python/PySide6 + pyqtgraph real-time ground station
+- pitch/roll estimation and an attitude visualization view
+- CSV telemetry/event logging and JSON session summaries
+- hardware-free simulator using the same ground-station command interface
+- automated parser, protocol, simulator, state, and statistics tests
 
 ## System Architecture
 
@@ -34,49 +34,51 @@ An ESP8285-based embedded telemetry system that acquires environmental and inert
        +--------------+--------------+
                       |
                   ESP8285
-             sensor + health layer
+          acquisition + health layer
                       |
-            telemetry / commands
+           state / telemetry / commands
                       |
-                  UART 115200
+                CRC-protected UART
                       |
               CP2102 USB bridge
                       |
                       v
        Python / PySide6 Ground Station
-       +-----------+----------+----------+
-       |           |          |          |
-    Live plots   Logging   Diagnostics  Control
+       +------------+-----------+------------+
+       |            |           |            |
+    Live plots   Logging   Diagnostics   Command/Control
 ```
 
-More detail is available in [`docs/architecture.md`](docs/architecture.md).
+See [`docs/architecture.md`](docs/architecture.md) for the software architecture.
 
 ## Hardware Characterization
 
-The current board has been characterized as:
-
-| Component | Result |
+| Component | Characterized result |
 | --- | --- |
 | MCU | ESP8285N08, 1 MB embedded flash |
 | USB-UART | Silicon Labs CP2102 |
 | Environmental sensor | BME280 at `0x76` |
 | IMU | MPU-9250-compatible device at `0x68`, `WHO_AM_I=0x71` |
-| Auxiliary device | Responds at `0x29`, intentionally left unidentified |
+| Auxiliary device | Responds at `0x29`; intentionally left unidentified |
 
-See [`docs/hardware.md`](docs/hardware.md) for the characterization approach and constraints.
+See [`docs/hardware.md`](docs/hardware.md) for the characterization process and limitations.
 
 ## Ground Station
 
-The dashboard provides:
+The desktop application provides:
 
 - live temperature, pressure, humidity, acceleration, and angular-rate plots
-- compact telemetry and sensor-health cards
-- pitch/roll estimation
-- packet count, average packet rate, packet loss, malformed packet count
-- live/stale/paused transport status
-- firmware version, telemetry rate, I2C errors, recoveries, and sensor-failure counters
+- Fahrenheit presentation while preserving protocol-native Celsius values
+- BME280, IMU, and auxiliary-device health indicators
+- pitch and roll estimation
+- optional attitude visualization with a 2D fallback
+- packet count, average packet rate, packet loss, and malformed-packet tracking
+- `LIVE`, `STALE`, and paused transport status
+- firmware version, telemetry interval, I2C errors, recoveries, and sensor-failure counters
+- CRC validity indication
 - command acknowledgements and device status responses
 - raw serial RX/TX inspection
+- telemetry/event logging and session summaries
 
 ### Run with hardware
 
@@ -93,7 +95,7 @@ Select the CP2102 COM port and connect.
 python -m ground_station.ground_station --demo
 ```
 
-The built-in simulator produces CRC-protected telemetry and responds to the same pause, resume, rate, status, and fault-injection commands.
+Demo mode produces CRC-protected telemetry and responds to the same status, pause, resume, rate, and fault-injection commands as the physical device.
 
 ## Firmware
 
@@ -109,7 +111,7 @@ Upload:
 python -m platformio run -t upload
 ```
 
-For this board, entering the ESP8266/ESP8285 bootloader may require holding the board's `USR` button while resetting the device before upload.
+On the characterized board, entering the ESP8266/ESP8285 bootloader may require holding `USR` while resetting before upload.
 
 ## Command Protocol
 
@@ -141,10 +143,10 @@ See [`docs/protocol.md`](docs/protocol.md).
 Example packet:
 
 ```text
-TEL,42,TIME=12345,TEMP=25.50,PRESS=980.10,HUM=31.20,AX=0.010,AY=-0.020,AZ=0.999,GX=0.10,GY=0.20,GZ=-0.30,BME=OK,IMU=OK,AUX=PRESENT,I2C_ERR=0,RECOVERY=0,BME_FAIL=0,IMU_FAIL=0,STATUS=NORMAL,CRC=ABCD
+TEL,42,TIME=12345,TEMP=25.50,PRESS=980.10,HUM=31.20,AX=0.010,AY=-0.020,AZ=0.999,GX=0.10,GY=0.20,GZ=-0.30,BME=OK,IMU=OK,AUX=PRESENT,I2C_ERR=0,RECOVERY=0,RECOVERY_ATTEMPTS=0,BME_FAIL=0,IMU_FAIL=0,STATUS=NORMAL,CRC=ABCD
 ```
 
-The CRC is calculated over the complete packet before the final `,CRC=XXXX` field. Legacy packets without CRC remain parseable by the ground station for development compatibility.
+CRC-16/CCITT is calculated over the packet before the final `CRC` field. The ground station rejects packets with an invalid CRC while remaining compatible with legacy development packets that omit CRC.
 
 ## Fault Management
 
@@ -157,9 +159,23 @@ NORMAL ------------------------------> DEGRADED
   +----------------------------------- FAULT
 ```
 
-The firmware periodically verifies sensor communication. Failed sensors are marked unhealthy and recovery is attempted without blocking the command processor. Injected faults are kept separate from physical device state so fault behavior can be demonstrated safely.
+The firmware periodically verifies sensor communication and attempts reinitialization when a physical sensor becomes unavailable. Injected faults are tracked separately from physical communication state so the state machine can be demonstrated safely.
 
 See [`docs/fault_management.md`](docs/fault_management.md).
+
+## Real-World Uses
+
+In its current USB-connected form, the platform is useful as a small engineering data-acquisition and diagnostics node. Practical applications include:
+
+- environmental + motion monitoring on a laboratory test fixture
+- vibration, tilt, and temperature observation on motors, fans, pumps, or other equipment during bench testing
+- condition monitoring during prototype electronics or enclosure testing
+- orientation and motion telemetry for robotics, small vehicles, or mechatronics prototypes
+- sensor and embedded-firmware validation with deliberate fault injection
+- a teaching/demo platform for telemetry protocols, state machines, CRCs, recovery logic, and host-device communication
+- a base platform for a remote IoT monitor once ESP8285 Wi-Fi transport is added
+
+See [`docs/use_cases.md`](docs/use_cases.md) for realistic deployments, current limits, and upgrade paths.
 
 ## Project Structure
 
@@ -179,6 +195,7 @@ embedded-telemetry/
 │   └── telemetry.cpp
 ├── ground_station/
 │   ├── app.py
+│   ├── attitude.py
 │   ├── demo_serial.py
 │   ├── logger.py
 │   ├── parser.py
@@ -191,18 +208,26 @@ embedded-telemetry/
 └── requirements.txt
 ```
 
-## Tests
+## Validation
+
+Run the Python test suite:
 
 ```powershell
 python -m unittest discover -s test -v
 ```
 
-Tests cover telemetry parsing, CRC validation, command construction, simulated command handling, state transitions, packet loss, malformed packets, and packet-rate statistics.
+Build the embedded firmware:
 
-GitHub Actions also performs a PlatformIO firmware build on pushes and pull requests.
+```powershell
+python -m platformio run
+```
 
-## Current Version
+The v1.0 hardware smoke test verified live BME280 and IMU telemetry, CRC validation, zero packet loss during the observed test session, bidirectional commands, telemetry-rate changes, pause/resume, `NORMAL -> DEGRADED -> FAULT -> NORMAL` transitions, and fault clearing on the characterized ESP8285 board.
 
-Firmware: **v0.6.0**
+## Scope
 
-The current focus is reliability, testability, and clean separation between sensor acquisition, health management, telemetry, commands, and UI presentation.
+Version 1.0 is a bench/prototype telemetry and fault-management platform. It is not a calibrated measurement instrument, safety system, or industrially certified controller. Deployment outside a development environment would require application-specific calibration, electrical protection, enclosure design, power management, and validation.
+
+## Version
+
+**v1.0.0**
