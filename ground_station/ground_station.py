@@ -1,11 +1,17 @@
 import sys
 
 from ground_station.app import run
+from ground_station.demo_serial import DemoSerialManager
 
 
 def main():
     demo_mode = "--demo" in sys.argv
-    run(demo_mode=demo_mode)
+
+    if demo_mode:
+        run(serial_manager=DemoSerialManager())
+        return
+
+    run()
 
 
 if __name__ == "__main__":
