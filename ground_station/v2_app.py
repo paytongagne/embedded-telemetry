@@ -4,8 +4,10 @@ from PySide6.QtWidgets import QApplication
 
 from ground_station.alerts import AlertEngine
 from ground_station.app import GroundStationWindow
+from ground_station.comparison_panel import SessionComparisonPanel
 from ground_station.engineering import EngineeringMetrics
 from ground_station.engineering_panel import EngineeringPanel
+from ground_station.fault_capture import FaultBlackBox
 from ground_station.history_panel import HistoryPanel
 from ground_station.parser import parse_telemetry
 from ground_station.validation_panel import ValidationPanel
@@ -15,8 +17,10 @@ class GroundStationV2Window(GroundStationWindow):
     def __init__(self, serial_manager=None):
         self.engineering_metrics = EngineeringMetrics(window_size=50)
         self.alert_engine = AlertEngine()
+        self.fault_black_box = FaultBlackBox(pre_samples=60, post_samples=20)
         self.engineering_panel = None
         self.history_panel = None
+        self.comparison_panel = None
         self.validation_panel = None
         super().__init__(serial_manager=serial_manager)
 
@@ -26,6 +30,7 @@ class GroundStationV2Window(GroundStationWindow):
 
         self.engineering_panel = EngineeringPanel()
         self.history_panel = HistoryPanel()
+        self.comparison_panel = SessionComparisonPanel()
         self.validation_panel = ValidationPanel(
             send_command=self.send_command,
             state_getter=lambda: self.latest_data.get(
@@ -37,7 +42,8 @@ class GroundStationV2Window(GroundStationWindow):
 
         tabs.insertTab(1, self.engineering_panel, "Engineering")
         tabs.insertTab(2, self.history_panel, "History / Replay")
-        tabs.insertTab(3, self.validation_panel, "Validation")
+        tabs.insertTab(3, self.comparison_panel, "Compare")
+        tabs.insertTab(4, self.validation_panel, "Validation")
 
     def on_serial_line(self, line):
         telemetry = parse_telemetry(line)
@@ -66,6 +72,15 @@ class GroundStationV2Window(GroundStationWindow):
             self.add_event("INFO", message)
             self._record_v2_event("INFO", "ALERT_CLEAR", message)
 
+        capture_path = self.fault_black_box.update(
+            telemetry,
+            metadata=self.validation_metadata(),
+        )
+        if capture_path is not None:
+            message = f"Fault black-box capture saved: {capture_path}"
+            self.add_event("INFO", message)
+            self._record_v2_event("INFO", "FAULT_CAPTURE", message)
+
     def validation_metadata(self):
         metadata = {
             "firmware": self.latest_data.get("FW", "unknown"),
@@ -90,6 +105,8 @@ class GroundStationV2Window(GroundStationWindow):
     def closeEvent(self, event):
         if self.history_panel is not None:
             self.history_panel.close()
+        if self.comparison_panel is not None:
+            self.comparison_panel.close()
         super().closeEvent(event)
 
 
