@@ -1,10 +1,11 @@
 import argparse
+import atexit
 import sys
 
 from ground_station.app import run
-from ground_station.demo_serial import DemoSerialManager
-from ground_station.mqtt_manager import MqttManager
-from ground_station.tcp_manager import TcpManager
+from ground_station.connection import ConnectionConfig, create_manager
+from ground_station.recording_manager import RecordingManager
+from ground_station.selector_manager import ConnectionSelectorManager
 
 
 def parse_args():
@@ -21,31 +22,41 @@ def parse_args():
     return parser.parse_args()
 
 
+def build_manager(args):
+    if args.demo:
+        return create_manager(ConnectionConfig(mode="demo"))
+
+    if args.wifi:
+        return create_manager(
+            ConnectionConfig(
+                mode="wifi",
+                host=args.wifi,
+                tcp_port=args.wifi_port,
+            )
+        )
+
+    if args.mqtt:
+        return create_manager(
+            ConnectionConfig(
+                mode="mqtt",
+                host=args.mqtt,
+                mqtt_port=args.mqtt_port,
+                device_id=args.device,
+                mqtt_user=args.mqtt_user,
+                mqtt_password=args.mqtt_password,
+            )
+        )
+
+    return ConnectionSelectorManager()
+
+
 def main():
     args = parse_args()
     sys.argv = [sys.argv[0]]
 
-    if args.demo:
-        run(serial_manager=DemoSerialManager())
-        return
-
-    if args.wifi:
-        run(serial_manager=TcpManager(host=args.wifi, port=args.wifi_port))
-        return
-
-    if args.mqtt:
-        run(
-            serial_manager=MqttManager(
-                host=args.mqtt,
-                port=args.mqtt_port,
-                device_id=args.device,
-                username=args.mqtt_user,
-                password=args.mqtt_password,
-            )
-        )
-        return
-
-    run()
+    manager = RecordingManager(build_manager(args))
+    atexit.register(manager.close)
+    run(serial_manager=manager)
 
 
 if __name__ == "__main__":
