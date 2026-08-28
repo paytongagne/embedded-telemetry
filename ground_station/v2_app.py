@@ -31,6 +31,12 @@ class GroundStationV2Window(GroundStationWindow):
         super().build_ui()
         tabs = self.centralWidget()
 
+        # The legacy Attitude tab is now the full 3D drone Flight View.
+        for index in range(tabs.count()):
+            if tabs.tabText(index) == "Attitude":
+                tabs.setTabText(index, "Flight View")
+                break
+
         self.engineering_panel = EngineeringPanel()
         self.history_panel = HistoryPanel()
         self.comparison_panel = SessionComparisonPanel()
@@ -62,6 +68,19 @@ class GroundStationV2Window(GroundStationWindow):
             telemetry.get("GX"),
             telemetry.get("GY"),
             telemetry.get("GZ"),
+        )
+
+        pitch, roll = self.calculate_pitch_roll(telemetry)
+        attitude_valid = (
+            pitch is not None
+            and roll is not None
+            and telemetry.get("IMU", "UNKNOWN") == "OK"
+        )
+        self.attitude_panel.update_flight_data(
+            telemetry,
+            pitch=pitch,
+            roll=roll,
+            valid=attitude_valid,
         )
 
         metrics = self.engineering_metrics.update(telemetry)
