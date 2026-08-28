@@ -10,6 +10,7 @@ from ground_station.engineering_panel import EngineeringPanel
 from ground_station.fault_capture import FaultBlackBox
 from ground_station.history_panel import HistoryPanel
 from ground_station.parser import parse_telemetry
+from ground_station.plot_enhancements import DashboardPlotEnhancer
 from ground_station.validation_panel import ValidationPanel
 
 
@@ -22,7 +23,9 @@ class GroundStationV2Window(GroundStationWindow):
         self.history_panel = None
         self.comparison_panel = None
         self.validation_panel = None
+        self.plot_enhancer = None
         super().__init__(serial_manager=serial_manager)
+        self.plot_enhancer = DashboardPlotEnhancer(self, max_points=180)
 
     def build_ui(self):
         super().build_ui()
@@ -51,6 +54,15 @@ class GroundStationV2Window(GroundStationWindow):
 
         if telemetry is None:
             return
+
+        if self.plot_enhancer is not None:
+            self.plot_enhancer.update(telemetry)
+
+        self.attitude_panel.set_angular_rates(
+            telemetry.get("GX"),
+            telemetry.get("GY"),
+            telemetry.get("GZ"),
+        )
 
         metrics = self.engineering_metrics.update(telemetry)
         alert_result = self.alert_engine.evaluate(
