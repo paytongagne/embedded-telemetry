@@ -18,6 +18,9 @@ htmlcov/
 
 # Runtime logs and local outputs
 logs/
+data/*.db
+data/*.db-shm
+data/*.db-wal
 
 # OS files
 .DS_Store
