@@ -1,10 +1,23 @@
 # Embedded Telemetry & Fault Management Platform
 
-**Version 1.0.0** | ESP8285 + C++ firmware + Python/PySide6 ground station
+**Version 2.0.0-dev** | ESP8285 + C++ firmware + Python/PySide6 engineering ground station
 
-A hardware-validated embedded telemetry platform that acquires environmental and inertial sensor data over I2C, performs device health monitoring and fault recovery, streams CRC-protected telemetry over UART, and exposes a desktop ground station for real-time visualization, command/control, diagnostics, logging, and fault injection.
+A hardware-backed embedded telemetry, diagnostics, and validation platform that acquires environmental and inertial sensor data over I2C, performs health monitoring and fault recovery, streams CRC-protected telemetry over USB or WiFi, and provides a desktop engineering workstation for live monitoring, persistent session history, replay, alerts, derived motion metrics, and automated fault-recovery validation.
 
 ![v1.0 hardware dashboard](docs/images/dashboard-v1.webp)
+
+## v2 Engineering Workstation
+
+The current v2 development branch adds product-level workflows on top of the hardware-validated v1 foundation:
+
+- connection manager for USB/Serial, Direct WiFi, MQTT, and Simulator modes
+- automatic SQLite session persistence for validated telemetry, commands, and transport events
+- History / Replay session browser with historical temperature and acceleration-magnitude plots
+- event timelines and CSV session export
+- rolling acceleration and angular-rate magnitude, RMS, variability, and temperature-window metrics
+- deterministic warning/critical alert engine for environmental, motion, packet-loss, and device-state conditions
+- automated `NORMAL -> DEGRADED -> NORMAL -> DEGRADED -> FAULT -> NORMAL` validation sequence
+- exportable HTML validation reports with per-step timing and run metadata
 
 ## What It Demonstrates
 
@@ -13,6 +26,7 @@ A hardware-validated embedded telemetry platform that acquires environmental and
 - BME280 temperature, pressure, and humidity acquisition
 - MPU-9250-compatible acceleration and gyroscope acquisition
 - bidirectional UART protocol over a CP2102 USB-UART bridge
+- direct WiFi TCP telemetry and optional MQTT transport
 - CRC-16/CCITT packet integrity validation
 - `NORMAL`, `DEGRADED`, and `FAULT` system-state management
 - periodic health checks, error counters, and automatic sensor reinitialization attempts
@@ -21,37 +35,34 @@ A hardware-validated embedded telemetry platform that acquires environmental and
 - packet-loss, malformed-packet, stale-link, and CRC diagnostics
 - Python/PySide6 + pyqtgraph real-time ground station
 - pitch/roll estimation and an attitude visualization view
-- CSV telemetry/event logging and JSON session summaries
-- hardware-free simulator using the same ground-station command interface
-- automated parser, protocol, simulator, state, and statistics tests
+- SQLite session history plus CSV/JSON logging
+- hardware-free simulator using the same command interface
+- automated parser, protocol, simulator, state, statistics, persistence, alert, metric, and validation tests
 
 ## System Architecture
 
 ```text
-                     I2C
-       +-----------------------------+
-       |              |              |
-    BME280      MPU-compatible    AUX 0x29
-       |              |              |
-       +--------------+--------------+
-                      |
-                  ESP8285
-          acquisition + health layer
-                      |
-           state / telemetry / commands
-                      |
-                CRC-protected UART
-                      |
-              CP2102 USB bridge
-                      |
-                      v
-       Python / PySide6 Ground Station
-       +------------+-----------+------------+
-       |            |           |            |
-    Live plots   Logging   Diagnostics   Command/Control
+                    I2C SENSOR LAYER
+             BME280 / IMU / AUX 0x29
+                         |
+                      ESP8285
+          acquisition + health + state machine
+                         |
+              CRC telemetry + commands
+                  /       |       \
+                USB      TCP      MQTT
+                  \       |       /
+                   TRANSPORT LAYER
+                         |
+              PySide6 Ground Station
+     +-----------+-----------+-----------+-----------+
+     |           |           |           |           |
+ Dashboard   Engineering   History    Validation   Raw/Attitude
+                 |           |           |
+            RMS/alerts    SQLite      PASS/FAIL
+                             |           |
+                         Replay/CSV   HTML report
 ```
-
-See [`docs/architecture.md`](docs/architecture.md) for the software architecture.
 
 ## Hardware Characterization
 
@@ -63,41 +74,40 @@ See [`docs/architecture.md`](docs/architecture.md) for the software architecture
 | IMU | MPU-9250-compatible device at `0x68`, `WHO_AM_I=0x71` |
 | Auxiliary device | Responds at `0x29`; intentionally left unidentified |
 
-See [`docs/hardware.md`](docs/hardware.md) for the characterization process and limitations.
-
 ## Ground Station
 
-The desktop application provides:
-
-- live temperature, pressure, humidity, acceleration, and angular-rate plots
-- Fahrenheit presentation while preserving protocol-native Celsius values
-- BME280, IMU, and auxiliary-device health indicators
-- pitch and roll estimation
-- optional attitude visualization with a 2D fallback
-- packet count, average packet rate, packet loss, and malformed-packet tracking
-- `LIVE`, `STALE`, and paused transport status
-- firmware version, telemetry interval, I2C errors, recoveries, and sensor-failure counters
-- CRC validity indication
-- command acknowledgements and device status responses
-- raw serial RX/TX inspection
-- telemetry/event logging and session summaries
-
-### Run with hardware
+Install dependencies:
 
 ```powershell
 python -m pip install -r requirements.txt
+```
+
+Launch the v2 connection manager:
+
+```powershell
 python -m ground_station.ground_station
 ```
 
-Select the CP2102 COM port and connect.
-
-### Run without hardware
+Power-user launch modes remain available:
 
 ```powershell
 python -m ground_station.ground_station --demo
+python -m ground_station.ground_station --wifi 192.168.1.50
+python -m ground_station.ground_station --mqtt 192.168.1.10
 ```
 
-Demo mode produces CRC-protected telemetry and responds to the same status, pause, resume, rate, and fault-injection commands as the physical device.
+The application provides:
+
+- live temperature, pressure, humidity, acceleration, and angular-rate plots
+- BME280, IMU, and auxiliary-device health indicators
+- pitch and roll estimation
+- packet count, average packet rate, packet loss, malformed-packet, CRC, and stale-link diagnostics
+- firmware version, telemetry interval, I2C errors, recoveries, and sensor-failure counters
+- command acknowledgements and raw RX/TX inspection
+- persistent session database at `data/telemetry.db`
+- historical session browsing and replay
+- derived motion metrics and alert tracking
+- automated fault-state validation and HTML evidence reports
 
 ## Firmware
 
@@ -130,16 +140,6 @@ CMD,CLEAR_FAULTS
 CMD,RESET
 ```
 
-Examples:
-
-```text
-ACK,SET_RATE,500
-STATUS,STATE=NORMAL,BME=OK,IMU=OK,AUX=PRESENT,PAUSED=0,RATE_MS=500,...
-ERR,RATE_RANGE,100-10000
-```
-
-See [`docs/protocol.md`](docs/protocol.md).
-
 ## Telemetry Protocol
 
 Example packet:
@@ -161,54 +161,7 @@ NORMAL ------------------------------> DEGRADED
   +----------------------------------- FAULT
 ```
 
-The firmware periodically verifies sensor communication and attempts reinitialization when a physical sensor becomes unavailable. Injected faults are tracked separately from physical communication state so the state machine can be demonstrated safely.
-
-See [`docs/fault_management.md`](docs/fault_management.md).
-
-## Real-World Uses
-
-In its current USB-connected form, the platform is useful as a small engineering data-acquisition and diagnostics node. Practical applications include:
-
-- environmental + motion monitoring on a laboratory test fixture
-- vibration, tilt, and temperature observation on motors, fans, pumps, or other equipment during bench testing
-- condition monitoring during prototype electronics or enclosure testing
-- orientation and motion telemetry for robotics, small vehicles, or mechatronics prototypes
-- sensor and embedded-firmware validation with deliberate fault injection
-- a teaching/demo platform for telemetry protocols, state machines, CRCs, recovery logic, and host-device communication
-- a base platform for a remote IoT monitor once ESP8285 Wi-Fi transport is added
-
-See [`docs/use_cases.md`](docs/use_cases.md) for realistic deployments, current limits, and upgrade paths.
-
-## Project Structure
-
-```text
-embedded-telemetry/
-├── include/
-│   ├── command.h
-│   ├── config.h
-│   ├── sensors.h
-│   ├── system_state.h
-│   └── telemetry.h
-├── src/
-│   ├── command.cpp
-│   ├── main.cpp
-│   ├── sensors.cpp
-│   ├── system_state.cpp
-│   └── telemetry.cpp
-├── ground_station/
-│   ├── app.py
-│   ├── attitude.py
-│   ├── demo_serial.py
-│   ├── logger.py
-│   ├── parser.py
-│   ├── protocol.py
-│   ├── serial_manager.py
-│   └── stats.py
-├── test/
-├── docs/
-├── platformio.ini
-└── requirements.txt
-```
+The v2 Validation tab automates these transitions using the safe injected-fault path and records per-step timing for later test evidence.
 
 ## Validation
 
@@ -226,10 +179,10 @@ python -m platformio run
 
 The v1.0 hardware smoke test verified live BME280 and IMU telemetry, CRC validation, zero packet loss during the observed test session, bidirectional commands, telemetry-rate changes, pause/resume, `NORMAL -> DEGRADED -> FAULT -> NORMAL` transitions, and fault clearing on the characterized ESP8285 board.
 
+## Road to v2.0
+
+The remaining top-end milestones are high-rate IMU/FFT analysis, black-box fault capture, session-to-session regression comparison, device configuration/calibration, richer network diagnostics, OTA firmware delivery, multi-device fleet monitoring, statistical anomaly detection, and a packaged Windows release.
+
 ## Scope
 
-Version 1.0 is a bench/prototype telemetry and fault-management platform. It is not a calibrated measurement instrument, safety system, or industrially certified controller. Deployment outside a development environment would require application-specific calibration, electrical protection, enclosure design, power management, and validation.
-
-## Version
-
-**v1.0.0**
+This is an engineering prototype and portfolio platform, not a calibrated measurement instrument, safety-certified controller, or production security appliance. Deployment outside a development environment requires application-specific calibration, electrical protection, secure transport configuration, enclosure/power design, and validation.
