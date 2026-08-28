@@ -1,5 +1,33 @@
 # Changelog
 
+## v2.0.0-dev
+
+Ground-station productization work in progress.
+
+### Ground Station
+
+- added a multi-transport connection manager for USB/Serial, Direct WiFi, MQTT, and Simulator modes
+- added local connection preference persistence using Qt `QSettings`
+- added a transport factory so connection modes are configured consistently in one place
+- added automatic SQLite session persistence without coupling storage logic into the dashboard
+- added session, telemetry, and event tables with firmware, transport, endpoint, packet-count, and timestamp metadata
+- added command and transport-event recording for later replay and test analysis
+
+### Testing and Tooling
+
+- added connection-factory unit tests
+- added SQLite persistence round-trip tests
+- updated CI test dependencies for MQTT-enabled test coverage
+
+### Planned for v2
+
+- History / Replay tab
+- configurable alert and alarm engine
+- automated fault-recovery test runner
+- RMS, vector-magnitude, rolling-statistics, and later high-rate FFT analysis
+- expanded device and network diagnostics
+- packaged Windows release
+
 ## v1.0.0
 
 First portfolio-ready hardware-validated release.
