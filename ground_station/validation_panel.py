@@ -10,15 +10,24 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ground_station.reporting import write_validation_report
 from ground_station.validation import FaultValidationEngine
 
 
 class ValidationPanel(QWidget):
-    def __init__(self, send_command, state_getter, connected_getter, parent=None):
+    def __init__(
+        self,
+        send_command,
+        state_getter,
+        connected_getter,
+        metadata_getter=None,
+        parent=None,
+    ):
         super().__init__(parent)
         self.send_command = send_command
         self.state_getter = state_getter
         self.connected_getter = connected_getter
+        self.metadata_getter = metadata_getter or (lambda: {})
         self.engine = FaultValidationEngine()
 
         layout = QVBoxLayout(self)
@@ -28,11 +37,15 @@ class ValidationPanel(QWidget):
         self.start_button.clicked.connect(self.start_validation)
         self.stop_button = QPushButton("Stop")
         self.stop_button.clicked.connect(self.stop_validation)
+        self.report_button = QPushButton("Export HTML Report")
+        self.report_button.clicked.connect(self.export_report)
+        self.report_button.setEnabled(False)
         self.status_label = QLabel("IDLE")
         self.status_label.setStyleSheet("font-size: 16px; font-weight: 700;")
 
         header.addWidget(self.start_button)
         header.addWidget(self.stop_button)
+        header.addWidget(self.report_button)
         header.addWidget(self.status_label)
         header.addStretch()
         layout.addLayout(header)
@@ -63,6 +76,7 @@ class ValidationPanel(QWidget):
             return
 
         self.engine.start()
+        self.report_button.setEnabled(False)
         self.status_label.setText("RUNNING")
         self.timer.start()
         self._send_pending_action()
@@ -72,6 +86,7 @@ class ValidationPanel(QWidget):
         self.engine.stop()
         self.timer.stop()
         self.status_label.setText("STOPPED")
+        self.report_button.setEnabled(bool(self.engine.results))
         self._refresh()
 
     def _tick(self):
@@ -85,11 +100,22 @@ class ValidationPanel(QWidget):
         if self.engine.finished:
             self.timer.stop()
             self.status_label.setText("PASS" if self.engine.passed else "FAIL")
+            self.report_button.setEnabled(True)
 
     def _send_pending_action(self):
         action = self.engine.next_action()
         if action:
             self.send_command(action)
+
+    def export_report(self):
+        if not self.engine.results:
+            return
+        path = write_validation_report(
+            self.engine.results,
+            self.engine.passed,
+            metadata=self.metadata_getter(),
+        )
+        self.status_label.setText(f"REPORT: {path}")
 
     def _refresh(self):
         results = self.engine.results
