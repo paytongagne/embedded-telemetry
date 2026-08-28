@@ -2,10 +2,10 @@ import argparse
 import atexit
 import sys
 
-from ground_station.app import run
 from ground_station.connection import ConnectionConfig, create_manager
 from ground_station.recording_manager import RecordingManager
 from ground_station.selector_manager import ConnectionSelectorManager
+from ground_station.v2_app import run_v2
 
 
 def parse_args():
@@ -56,7 +56,7 @@ def main():
 
     manager = RecordingManager(build_manager(args))
     atexit.register(manager.close)
-    run(serial_manager=manager)
+    run_v2(serial_manager=manager)
 
 
 if __name__ == "__main__":
