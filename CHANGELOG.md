@@ -12,21 +12,32 @@ Ground-station productization work in progress.
 - added automatic SQLite session persistence without coupling storage logic into the dashboard
 - added session, telemetry, and event tables with firmware, transport, endpoint, packet-count, and timestamp metadata
 - added command and transport-event recording for later replay and test analysis
+- added a History / Replay tab with recorded-session browsing, historical plots, event timelines, replay speed control, and CSV export
+- added rolling engineering metrics for acceleration magnitude, angular-rate magnitude, RMS, variability, and temperature-window change
+- added deterministic edge-triggered alerts for environmental, motion, packet-loss, and device-state conditions
+- added an automated fault-recovery validation runner for `NORMAL -> DEGRADED -> NORMAL -> DEGRADED -> FAULT -> NORMAL`
+- added HTML validation report generation with step timing and run metadata
 
 ### Testing and Tooling
 
 - added connection-factory unit tests
 - added SQLite persistence round-trip tests
+- added engineering-metric, alert, and validation-state-machine tests
 - updated CI test dependencies for MQTT-enabled test coverage
+- ignored generated database, export, report, and capture artifacts
 
-### Planned for v2
+### Next v2 Milestones
 
-- History / Replay tab
-- configurable alert and alarm engine
-- automated fault-recovery test runner
-- RMS, vector-magnitude, rolling-statistics, and later high-rate FFT analysis
-- expanded device and network diagnostics
-- packaged Windows release
+- configurable alert thresholds and alert acknowledgement workflow
+- fault black-box capture with pre-fault and post-fault telemetry windows
+- session comparison and firmware-regression analysis
+- high-rate IMU acquisition mode and FFT/vibration analysis
+- expanded device/network diagnostics, RSSI, reset reason, and build metadata
+- device configuration and calibration workflows
+- OTA firmware update path with image integrity checks
+- multi-device/fleet monitoring
+- statistical baseline and anomaly-detection layer
+- packaged Windows release and installer
 
 ## v1.0.0
 
