@@ -32,6 +32,7 @@ class GroundStationV2Window(GroundStationWindow):
                 "STATUS", self.latest_data.get("STATE", "UNKNOWN")
             ),
             connected_getter=lambda: bool(self.serial_manager.connected),
+            metadata_getter=self.validation_metadata,
         )
 
         tabs.insertTab(1, self.engineering_panel, "Engineering")
@@ -64,6 +65,21 @@ class GroundStationV2Window(GroundStationWindow):
             message = f"{alert.key}: cleared"
             self.add_event("INFO", message)
             self._record_v2_event("INFO", "ALERT_CLEAR", message)
+
+    def validation_metadata(self):
+        metadata = {
+            "firmware": self.latest_data.get("FW", "unknown"),
+            "system_state": self.latest_data.get(
+                "STATUS", self.latest_data.get("STATE", "UNKNOWN")
+            ),
+            "packets_observed": self.stats.total_packets,
+            "packet_loss_percent": f"{self.stats.packet_loss_percent:.3f}",
+            "connection": getattr(self.serial_manager, "port", "unknown"),
+        }
+        session_id = getattr(self.serial_manager, "session_id", None)
+        if session_id is not None:
+            metadata["session_id"] = session_id
+        return metadata
 
     def _record_v2_event(self, level, category, message):
         database = getattr(self.serial_manager, "database", None)
