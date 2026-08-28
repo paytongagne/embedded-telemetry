@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QPlainTextEdit,
     QPushButton,
+    QSlider,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -21,7 +22,7 @@ from ground_station.database import TelemetryDatabase
 
 
 class HistoryPanel(QWidget):
-    """Browse, replay, and export persisted telemetry sessions."""
+    """Browse, inspect, scrub, replay, and export persisted telemetry sessions."""
 
     def __init__(self, database_path="data/telemetry.db", parent=None):
         super().__init__(parent)
@@ -29,6 +30,7 @@ class HistoryPanel(QWidget):
         self.current_session_id = None
         self.current_rows = []
         self.replay_position = 0.0
+        self._updating_scrubber = False
 
         layout = QVBoxLayout(self)
 
@@ -75,31 +77,98 @@ class HistoryPanel(QWidget):
         self.summary_label.setStyleSheet("font-weight: 700;")
         layout.addWidget(self.summary_label)
 
-        self.temp_plot = pg.PlotWidget(title="Historical Temperature")
-        self.temp_plot.setLabel("bottom", "Device uptime", units="s")
-        self.temp_plot.setLabel("left", "Temperature", units="°F")
-        self.temp_plot.showGrid(x=True, y=True, alpha=0.2)
-        self.temp_curve = self.temp_plot.plot()
+        scrub_row = QHBoxLayout()
+        scrub_row.addWidget(QLabel("Session position"))
+        self.scrubber = QSlider(Qt.Horizontal)
+        self.scrubber.setRange(0, 1000)
+        self.scrubber.setValue(1000)
+        self.scrubber.sliderPressed.connect(self.stop_replay)
+        self.scrubber.valueChanged.connect(self._scrub_to)
+        self.position_label = QLabel("--")
+        self.position_label.setMinimumWidth(120)
+        scrub_row.addWidget(self.scrubber, 1)
+        scrub_row.addWidget(self.position_label)
+        layout.addLayout(scrub_row)
 
-        self.motion_plot = pg.PlotWidget(title="Historical Acceleration Magnitude")
-        self.motion_plot.setLabel("bottom", "Device uptime", units="s")
-        self.motion_plot.setLabel("left", "Acceleration magnitude", units="g")
-        self.motion_plot.showGrid(x=True, y=True, alpha=0.2)
-        self.motion_curve = self.motion_plot.plot()
+        self.temp_plot = self._make_plot("Historical Temperature", "Temperature", "°F")
+        self.temp_curve = self.temp_plot.plot(
+            name="Temperature",
+            pen=pg.mkPen("#ffb454", width=2.2),
+        )
+        self.temp_plot.addItem(
+            pg.InfiniteLine(
+                pos=95.0,
+                angle=0,
+                pen=pg.mkPen("#ff8f70", width=1.2, style=Qt.DashLine),
+                label="95°F alert threshold",
+                labelOpts={"position": 0.96, "color": "#ffb09b"},
+            )
+        )
+
+        self.motion_plot = self._make_plot(
+            "Historical Acceleration Magnitude", "Acceleration magnitude", "g"
+        )
+        self.motion_curve = self.motion_plot.plot(
+            name="|A|",
+            pen=pg.mkPen("#ffd166", width=2.2),
+        )
+        self.motion_plot.addItem(
+            pg.InfiniteLine(
+                pos=1.0,
+                angle=0,
+                pen=pg.mkPen("#8b949e", width=1.0, style=Qt.DotLine),
+                label="1 g reference",
+                labelOpts={"position": 0.04, "color": "#aeb6c0"},
+            )
+        )
+
+        self.gyro_plot = self._make_plot(
+            "Historical Angular-Rate Magnitude", "Angular-rate magnitude", "°/s"
+        )
+        self.gyro_curve = self.gyro_plot.plot(
+            name="|ω|",
+            pen=pg.mkPen("#69d2e7", width=2.2),
+        )
+
+        self.motion_plot.setXLink(self.temp_plot)
+        self.gyro_plot.setXLink(self.temp_plot)
+
+        self.replay_cursors = []
+        for plot in (self.temp_plot, self.motion_plot, self.gyro_plot):
+            cursor = pg.InfiniteLine(
+                angle=90,
+                movable=False,
+                pen=pg.mkPen("#f0f3f6", width=1.4, style=Qt.DashLine),
+            )
+            cursor.hide()
+            plot.addItem(cursor, ignoreBounds=True)
+            self.replay_cursors.append(cursor)
 
         layout.addWidget(self.temp_plot, 1)
         layout.addWidget(self.motion_plot, 1)
+        layout.addWidget(self.gyro_plot, 1)
 
         self.event_log = QPlainTextEdit()
         self.event_log.setReadOnly(True)
         self.event_log.setPlaceholderText("Session events will appear here.")
-        layout.addWidget(self.event_log, 1)
+        self.event_log.setMaximumHeight(150)
+        layout.addWidget(self.event_log)
 
         self.replay_timer = QTimer(self)
         self.replay_timer.setInterval(100)
         self.replay_timer.timeout.connect(self._replay_tick)
 
         self.refresh_sessions()
+
+    @staticmethod
+    def _make_plot(title, left_label, units):
+        plot = pg.PlotWidget(title=title)
+        plot.setLabel("bottom", "Device uptime", units="s")
+        plot.setLabel("left", left_label, units=units)
+        plot.showGrid(x=True, y=True, alpha=0.28)
+        plot.setMouseEnabled(x=True, y=True)
+        plot.getPlotItem().setMenuEnabled(True)
+        return plot
 
     @staticmethod
     def _display_time(value):
@@ -114,8 +183,8 @@ class HistoryPanel(QWidget):
         return (float(value) * 9.0 / 5.0) + 32.0
 
     @staticmethod
-    def _accel_magnitude(row):
-        values = (row.get("ax_g"), row.get("ay_g"), row.get("az_g"))
+    def _vector_magnitude(row, keys):
+        values = tuple(row.get(key) for key in keys)
         if any(value is None for value in values):
             return float("nan")
         return math.sqrt(sum(float(value) ** 2 for value in values))
@@ -158,7 +227,7 @@ class HistoryPanel(QWidget):
         self.current_session_id = session_id
         self.current_rows = self.database.load_session_telemetry(session_id)
         events = self.database.load_session_events(session_id)
-        self._render_rows(self.current_rows)
+        self._render_count(len(self.current_rows))
 
         self.event_log.clear()
         for event in events:
@@ -168,6 +237,7 @@ class HistoryPanel(QWidget):
                 f"{event.get('category', '')}: {event.get('message', '')}"
             )
 
+        self._set_scrubber(1000)
         if self.current_rows:
             first = self.current_rows[0]
             last = self.current_rows[-1]
@@ -179,17 +249,47 @@ class HistoryPanel(QWidget):
         else:
             self.summary_label.setText(f"Session {session_id} contains no telemetry packets.")
 
-    def _render_rows(self, rows):
+    def _render_count(self, count):
+        rows = self.current_rows[:count]
         x = []
         temp = []
         motion = []
+        gyro = []
         for index, row in enumerate(rows):
             device_time = row.get("device_time_ms")
-            x.append(index if device_time is None else float(device_time) / 1000.0)
+            x_value = index if device_time is None else float(device_time) / 1000.0
+            x.append(x_value)
             temp.append(self._c_to_f(row.get("temperature_c")))
-            motion.append(self._accel_magnitude(row))
+            motion.append(self._vector_magnitude(row, ("ax_g", "ay_g", "az_g")))
+            gyro.append(self._vector_magnitude(row, ("gx_dps", "gy_dps", "gz_dps")))
+
         self.temp_curve.setData(x, temp)
         self.motion_curve.setData(x, motion)
+        self.gyro_curve.setData(x, gyro)
+
+        if x:
+            cursor_x = x[-1]
+            for cursor in self.replay_cursors:
+                cursor.setPos(cursor_x)
+                cursor.show()
+            self.position_label.setText(f"{count}/{len(self.current_rows)} | {cursor_x:.1f} s")
+        else:
+            for cursor in self.replay_cursors:
+                cursor.hide()
+            self.position_label.setText("0 packets")
+
+    def _scrub_to(self, value):
+        if self._updating_scrubber or not self.current_rows:
+            return
+        fraction = float(value) / 1000.0
+        count = max(1, min(len(self.current_rows), int(round(fraction * len(self.current_rows)))))
+        self.replay_position = float(count)
+        self._render_count(count)
+
+    def _set_scrubber(self, value):
+        self._updating_scrubber = True
+        self.scrubber.setValue(int(value))
+        self._updating_scrubber = False
 
     def start_replay(self):
         if not self.current_rows:
@@ -197,8 +297,8 @@ class HistoryPanel(QWidget):
         if not self.current_rows:
             return
         self.replay_position = 0.0
-        self.temp_curve.setData([], [])
-        self.motion_curve.setData([], [])
+        self._render_count(0)
+        self._set_scrubber(0)
         self.replay_timer.start()
         self.summary_label.setText(f"Replaying session {self.current_session_id}...")
 
@@ -213,7 +313,8 @@ class HistoryPanel(QWidget):
         speed = float(self.speed_combo.currentData() or 1.0)
         self.replay_position += speed
         count = max(1, min(len(self.current_rows), int(self.replay_position)))
-        self._render_rows(self.current_rows[:count])
+        self._render_count(count)
+        self._set_scrubber((count / len(self.current_rows)) * 1000.0)
 
         if count >= len(self.current_rows):
             self.stop_replay()
