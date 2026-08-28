@@ -21,6 +21,9 @@ logs/
 data/*.db
 data/*.db-shm
 data/*.db-wal
+exports/
+reports/
+captures/
 
 # OS files
 .DS_Store
